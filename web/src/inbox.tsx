@@ -41,7 +41,7 @@ import { filtering, inboxGroups, matches, noFilters, projectOf, readFilters, wit
  * The User's Inbox in the Workspace, fetched again after each live event: an Inbox is worked
  * out from current state, so any change in the Workspace may add or remove an item.
  */
-function useInbox(workspaceId: string): { inbox: Inbox | null; failure: string | null; reload: () => void } {
+export function useInbox(workspaceId: string): { inbox: Inbox | null; failure: string | null; reload: () => void } {
   const [inbox, setInbox] = useState<Inbox | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const latest = useLatest();
@@ -62,10 +62,10 @@ function useInbox(workspaceId: string): { inbox: Inbox | null; failure: string |
   return { inbox, failure, reload: load };
 }
 
-/** The Inbox link for the sidebar, with its count in red. */
-export function InboxLink({ workspaceId, current }: { workspaceId: string; current: boolean }) {
+/** The Inbox link for the sidebar, with its count in red, given the sidebar's Inbox (null while it loads). */
+export function InboxLink({ inbox, current }: { inbox: Inbox | null; current: boolean }) {
   const to = useAddresses();
-  const count = useInbox(workspaceId).inbox?.count ?? null;
+  const count = inbox?.count ?? null;
   const waiting = count === null ? "" : count === 0 ? ", nothing waiting" : `, ${count} waiting`;
   return (
     <Link to={to.workspace("inbox")} current={current} aria-label={`Inbox${waiting}`} className="side-link">

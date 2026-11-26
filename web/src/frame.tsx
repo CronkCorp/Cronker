@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { api, nameOf, type ProjectSummary, type User, type WorkspaceSummary } from "./api.js";
 import { AddressContext, addresses, useAddresses } from "./addresses.js";
-import { InboxLink } from "./inbox.js";
+import { InboxLink, useInbox } from "./inbox.js";
+import { knowledgeCounts } from "./knowledge-counts.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
@@ -230,7 +231,6 @@ function Sidebar({
   // On a phone, following a link out of the menu closes it.
   const closing = () => setMenuOpen(false);
   const area = place.area;
-  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") => to.knowledge(activeProject, kind);
 
   return (
     <nav aria-label="Sidebar" className={`sidebar${menuOpen ? " sidebar-open" : ""}`}>
@@ -242,25 +242,7 @@ function Sidebar({
         {current && (
           <>
             <SearchBox key={`search ${current.id}`} />
-            <InboxLink key={current.id} workspaceId={current.id} current={area === "inbox"} />
-            {activeProject && (
-              // The board, the List, a Ticket and Project settings are all the Project's Tickets' pages.
-              <SideLink to={to.tickets(activeProject)} current={area === "project"}>
-                Tickets
-              </SideLink>
-            )}
-            <SideLink to={knowledge("documents")} current={area === "documents"}>
-              Documents
-            </SideLink>
-            <SideLink to={knowledge("glossary")} current={area === "terms"}>
-              Terms
-            </SideLink>
-            <SideLink to={knowledge("decisions")} current={area === "decisions"}>
-              Decisions
-            </SideLink>
-            <SideLink to={knowledge("artifacts")} current={area === "artifacts"}>
-              Artifacts
-            </SideLink>
+            <SidebarLinks key={current.id} workspaceId={current.id} activeProject={activeProject} area={area} />
           </>
         )}
         <button
@@ -331,10 +313,54 @@ function Sidebar({
   );
 }
 
-function SideLink({ to, current, children }: { to: string; current: boolean; children: ReactNode }) {
+/**
+ * The Inbox and the links to the active Project's Tickets and knowledge, sharing one fetch of the Inbox: each
+ * knowledge link counts the New knowledge of its kind waiting for the place it leads to.
+ */
+function SidebarLinks({
+  workspaceId,
+  activeProject,
+  area,
+}: {
+  workspaceId: string;
+  activeProject: ProjectSummary | null;
+  area: Place["area"];
+}) {
+  const to = useAddresses();
+  const { inbox } = useInbox(workspaceId);
+  const counts = knowledgeCounts(inbox, activeProject?.id ?? null);
+  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") => to.knowledge(activeProject, kind);
   return (
-    <Link to={to} current={current} className="side-link">
+    <>
+      <InboxLink inbox={inbox} current={area === "inbox"} />
+      {activeProject && (
+        // The board, the List, a Ticket and Project settings are all the Project's Tickets' pages.
+        <SideLink to={to.tickets(activeProject)} current={area === "project"}>
+          Tickets
+        </SideLink>
+      )}
+      <SideLink to={knowledge("documents")} current={area === "documents"} count={counts.document}>
+        Documents
+      </SideLink>
+      <SideLink to={knowledge("glossary")} current={area === "terms"} count={counts.term}>
+        Terms
+      </SideLink>
+      <SideLink to={knowledge("decisions")} current={area === "decisions"} count={counts.decision}>
+        Decisions
+      </SideLink>
+      <SideLink to={knowledge("artifacts")} current={area === "artifacts"} count={counts.artifact}>
+        Artifacts
+      </SideLink>
+    </>
+  );
+}
+
+/** A sidebar link, with a red count of what is new there when there is some, read as part of its name. */
+function SideLink({ to, current, count = 0, children }: { to: string; current: boolean; count?: number; children: string }) {
+  return (
+    <Link to={to} current={current} className="side-link" aria-label={count > 0 ? `${children}, ${count} new` : undefined}>
       {children}
+      {count > 0 ? <span className="count">{count}</span> : null}
     </Link>
   );
 }
