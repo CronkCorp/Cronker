@@ -154,6 +154,7 @@ describe("MCP with an Agent token", () => {
       "unarchive_ticket",
       "add_relation",
       "remove_relation",
+      "close_as_duplicate",
     ];
     expect(await names(full.secret)).toEqual(expect.arrayContaining(fullOnly));
     for (const secret of [write.secret, read.secret]) {

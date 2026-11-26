@@ -180,3 +180,26 @@ for (const { width, height } of [
     expect(label.x + label.width).toBeLessThanOrEqual(fields.x + fields.width);
   });
 }
+
+test("close a Ticket as a duplicate of another from its Relations", async ({ page, cronk }) => {
+  await signedInWithProject(page, cronk);
+  const board = page.getByRole("region", { name: "Board" });
+  await newTicket(page, "Dark mode");
+  await newTicket(page, "Night theme");
+  await board.getByRole("link", { name: /CRONK-2 Night theme/ }).click();
+  await expect(page.getByRole("heading", { name: "CRONK-2 Night theme" })).toBeVisible();
+
+  const relations = page.getByRole("region", { name: "Relations" });
+  await relations.getByRole("button", { name: /^Relation / }).click();
+  await page.getByRole("option", { name: "Duplicate of (closes it)" }).click();
+  await relations.getByRole("combobox", { name: "Ticket" }).fill("CRONK-1");
+  await relations.getByRole("button", { name: "Add" }).click();
+
+  await expect(relations.getByRole("list", { name: "Duplicate of" }).getByRole("link", { name: /CRONK-1 Dark mode/ })).toBeVisible();
+  await expect(fieldPicker(page, "Status")).toContainText("Canceled");
+  await page.getByRole("link", { name: /CRONK-1 Dark mode/ }).click();
+  await expect(page.getByRole("heading", { name: "CRONK-1 Dark mode" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Relations" }).getByRole("list", { name: "Duplicated by" }).getByRole("link", { name: /CRONK-2 Night theme/ }),
+  ).toBeVisible();
+});

@@ -178,7 +178,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "as `knowledge`, the Terms (with their definitions and words to avoid) and Decisions (key, title and status; " +
         "read one with `read_decision` for its reasoning) its description and Comments mention, each once; " +
         "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`, and those on its Reports, each naming its `document`; its Relations: " +
-        "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
+        "the Tickets it blocks, is blocked by and relates to, the original it was closed as a duplicate of and its duplicates, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on, each with its unresolved threads (`threads`: the review written on it, each thread's first Comment with its `quote` and `anchor`, `outdated` once the passage is gone, and its replies); its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
         "changes requested, and by whom), the Step that produced it and the failing check or review requesting changes that last sent the Ticket back to that Step, which Cronk's Comment also links, " +
@@ -1594,6 +1594,29 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           const found = await ticketByKeyOrId(ticket);
           const named = isUuid(other) ? { ticketId: other } : { ticketKey: other };
           return send("POST", `/api/tickets/${found.id}/relations`, { kind, ...named });
+        }),
+    );
+
+    server.registerTool(
+      "close_as_duplicate",
+      {
+        title: "Close a Ticket as a duplicate of another",
+        description:
+          "With a Full token: closes a Ticket as a duplicate of another Ticket of your Workspace, the original that " +
+          "carries the work, as your Owner would: it relates the two (`duplicateOf` and `duplicatedBy`) and moves the " +
+          "Ticket to its Project's first Canceled Status, stopping its running Run. Needs Write on both Tickets; the " +
+          "Change names you with no Run. Refused for a Ticket already Done or Canceled (`ticket_finished`), the " +
+          "Ticket itself (`relation_to_itself`) and an original that is itself a duplicate (`original_is_duplicate`).",
+        inputSchema: {
+          ticket: ticketArgument.describe("The duplicate: its key, such as `CRONK-12`, or its id."),
+          original: ticketArgument.describe("The Ticket it duplicates: its key, such as `CRONK-12`, or its id."),
+        },
+      },
+      ({ ticket, original }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          const named = isUuid(original) ? { ticketId: original } : { ticketKey: original };
+          return send("POST", `/api/tickets/${found.id}/duplicate`, named);
         }),
     );
 

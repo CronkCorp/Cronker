@@ -57,8 +57,9 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 
 ### Tickets
 
-- Key `<PROJECT KEY>-<n>`, title, Markdown description, Status, Priority, Labels, Assignee, Delegate, Autonomous Delegation, parent, blocks and relates-to Relations, Linked Documents, Attachments, due date and estimate. No custom fields for now.
+- Key `<PROJECT KEY>-<n>`, title, Markdown description, Status, Priority, Labels, Assignee, Delegate, Autonomous Delegation, parent, blocks, relates-to and duplicate Relations, Linked Documents, Attachments, due date and estimate. No custom fields for now.
 - Comments, and a timeline of Changes and Runs.
+- **Close as duplicate** (CRONK-177). A User, or a Full token, closes a Ticket as a duplicate of another Ticket of the Workspace: one step relates them (`duplicateOf` on the duplicate, `duplicatedBy` on the original) and moves the duplicate to its Project's first Canceled Status, stopping its Run; it then counts as finished, as any Canceled Ticket does. Refused for a Ticket already Done or Canceled, and for an original that is itself a duplicate, naming the Ticket to use. Removing the Relation leaves the Ticket Canceled; its Sub-Tickets and blocks stay as they were.
 
 ### GitHub
 
