@@ -408,8 +408,10 @@ export function runDaemon(options: RunOptions): RunningDaemon {
           body: { reason: "runner restarted" },
         }).catch(() => {});
       }
-      await rm(path, { force: true });
+      // The history record ends before the process record goes, so a Run whose process record is gone
+      // never shows as running in `cronk-runner logs`, even if this daemon stops in between.
       await endRunRecord(historyDir, record.runId).catch(() => {});
+      await rm(path, { force: true });
       print(
         `Run ${record.runId}: killed what the last daemon left running; its Run ended (runner restarted).`,
       );
