@@ -100,6 +100,10 @@ describe("starting Runs", () => {
         `Reach Cronk through its MCP server at ${cronk.url}/mcp. Read the Ticket there, with its Comments, ` +
           "Relations and the Reports of earlier Runs: this Brief doesn't repeat them.",
         "",
+        "CRONK-1 is in the Project CRONK (Cronker). Its Documents, glossary and Decisions, and the Workspace's, are " +
+          'where the work\'s context is: pass `project: "CRONK"` to the tools that take one for the Project\'s own. ' +
+          "Read another Project's only where the Ticket names it.",
+        "",
         `Your Run id is ${run.id}.`,
         "",
         "End the Run by calling `finish` with your Run id and one of these Outcomes:",

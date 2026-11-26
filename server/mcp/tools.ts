@@ -225,7 +225,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           .string()
           .optional()
           .describe(
-            "A Project's key, such as `CRONK`: only its own Tickets and knowledge and the Transcripts of Runs on its " +
+            "A Project's key, such as `ABC`: only its own Tickets and knowledge and the Transcripts of Runs on its " +
               "Tickets. The whole Workspace when left out.",
           ),
         kinds: z
@@ -254,7 +254,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "Tickets of your Workspace, by Project in board order, narrowed by whichever filters are given. " +
         "Read one with `read_ticket` for its description and Comments.",
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. All Projects when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. All Projects when left out."),
         status: z.string().optional().describe("A Status's name, such as `Backlog`, ignoring case."),
         priority: z.enum(["urgent", "high", "medium", "low", "none"]).optional(),
         label: z.string().optional().describe("A Label, ignoring case."),
@@ -510,7 +510,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "one instead; check a fault in the code still happens on the Repository's default branch, not only on your " +
         "own branch; and name any related Tickets in the description." + avoidedWordsNote,
       inputSchema: {
-        project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
+        project: z.string().min(1).describe("A Project's key, such as `ABC`."),
         ...newTicketFields,
         run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it, recorded as the source."),
       },
@@ -606,7 +606,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "in tree order: each right after its parent (`parentId`), siblings by their place (`position`). A Project's " +
         "page tree and the Workspace's are separate. Read one with `read_document`.",
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's page tree when left out."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -680,7 +680,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         " It waits as a New knowledge item in the Inbox of the Assignee of your named Run's Ticket, or else of your Owner." +
         avoidedWordsNote,
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's page tree when left out."),
         ...bodyFields(Type.Omit(DocumentCreate, ["parentId", "runId"])),
         parent: z.string().optional().describe("The slug or id of a Document of the same page tree to sit under."),
         run: z
@@ -762,7 +762,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
   const termArgument = z
     .string()
     .min(1)
-    .describe("The Term's name, ignoring case, after its Project's key for a Project's (`CRONK/Ticket`); or its id.");
+    .describe("The Term's name, ignoring case, after its Project's key for a Project's (`ABC/Ticket`); or its id.");
   const termPath = (term: string) => `/api/terms/${encodeURIComponent(term)}`;
 
   server.registerTool(
@@ -775,7 +775,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "the words to avoid, its current Version and `projectId`, null for the Workspace's. Use its names, and avoid " +
         "the words it lists, in what you write.",
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's Terms when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's Terms when left out."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -839,7 +839,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary." +
         " It waits as a New knowledge item in the Inbox of the Assignee of your named Run's Ticket, or else of your Owner." + avoidedWordsNote,
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's when left out."),
         ...bodyFields(Type.Omit(TermCreate, ["runId"])),
         run: z
           .string()
@@ -976,7 +976,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "A Project's Artifacts, or the Workspace's when no Project is given, last changed first, without their files. " +
         "Read one with `read_artifact`.",
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's when left out."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -1020,7 +1020,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "Workspace. It waits as a New knowledge item in the Inbox of the Assignee of that Ticket, or else of your Owner. " +
         sizeLimit + avoidedWordsNote,
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's when left out."),
         ...bodyFields(Type.Omit(ArtifactCreate, ["runId"])),
         run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it: links the Artifact to its Ticket."),
       },
@@ -1088,7 +1088,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
   const decisionArgument = z
     .string()
     .min(1)
-    .describe("The Decision's number, after its Project's key for a Project's (`CRONK/3`, or `3` for the Workspace's own); or its id.");
+    .describe("The Decision's number, after its Project's key for a Project's (`ABC/3`, or `3` for the Workspace's own); or its id.");
   const decisionPath = (decision: string) => `/api/decisions/${encodeURIComponent(decision)}`;
 
   server.registerTool(
@@ -1100,7 +1100,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "each with its status (proposed, accepted, rejected, deprecated or superseded) and, when superseded, the " +
         "Decision replacing it (`supersededById`). Read one with `read_decision`.",
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's own when left out."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -1162,7 +1162,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "its status." +
         " It waits as a New knowledge item in the Inbox of the Assignee of your named Run's Ticket, or else of your Owner." + avoidedWordsNote,
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's own when left out."),
         ...bodyFields(Type.Pick(DecisionCreate, ["title", "body"])),
         run: z
           .string()
@@ -1203,7 +1203,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "the Workspace's, alphabetical, and its Decisions are its own; with no Project given, the Workspace's own " +
         "Terms and Decisions. Write each file at its path; Cronk never commits to a Repository itself.",
       inputSchema: {
-        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+        project: z.string().optional().describe("A Project's key, such as `ABC`. The Workspace's own when left out."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -1226,7 +1226,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
     });
   }
 
-  const projectArgument = z.string().min(1).describe("The Project's key, such as `CRONK`.");
+  const projectArgument = z.string().min(1).describe("The Project's key, such as `ABC`.");
   const statusArgument = z.string().min(1).describe("A Status of the Project: its name, ignoring case, or its id.");
   const boardRule =
     "Needs Write in the Project: the least of its Agent Access, your Owner's Access and your token's access. " +
