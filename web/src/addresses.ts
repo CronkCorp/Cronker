@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ProjectSummary } from "./api.js";
 import { replace } from "./router.js";
+import { onTicketsView, storedTicketsView, type TicketsView } from "./storage.js";
 
 /**
  * The web client's addresses, all built here. Every page of a Workspace is under its slug:
@@ -42,6 +43,9 @@ export const addresses = {
   agent: (workspace: WorkspaceRef, agentId: string) => `/${workspace.slug}/agents/${part(agentId)}`,
   project: (workspace: WorkspaceRef, key: string, view?: ProjectView) =>
     `/${workspace.slug}/projects/${part(key.toUpperCase())}${view ? `/${view}` : ""}`,
+  /** A Project's Tickets, in the view last chosen on this browser: its board, or its List. */
+  tickets: (workspace: WorkspaceRef, key: string, view: TicketsView = storedTicketsView()) =>
+    addresses.project(workspace, key, view === "list" ? "list" : undefined),
   /** A Project's page of a kind of knowledge, or the Workspace's own when the Project's key is null. */
   knowledge: (workspace: WorkspaceRef, key: string | null, kind: "documents" | "glossary" | "decisions" | "artifacts") =>
     key === null ? addresses.workspace(workspace, kind) : addresses.project(workspace, key, kind),
@@ -82,6 +86,7 @@ export function useActiveProject(): ProjectSummary | null {
  */
 export function useAddresses() {
   const { workspace, projects } = useContext(AddressContext);
+  const ticketsView = useSyncExternalStore(onTicketsView, storedTicketsView);
   return useMemo(() => {
     const ws: WorkspaceRef = workspace ?? { slug: "" };
     const keyOf = (projectId: string | null) =>
@@ -92,6 +97,8 @@ export function useAddresses() {
       workspace: (page?: WorkspacePage) => addresses.workspace(ws, page),
       agent: (agentId: string) => addresses.agent(ws, agentId),
       project: (project: { key: string }, view?: ProjectView) => addresses.project(ws, project.key, view),
+      /** A Project's Tickets, in the view last chosen on this browser. */
+      tickets: (project: { key: string }) => addresses.tickets(ws, project.key, ticketsView),
       knowledge: (project: { key: string } | null, kind: "documents" | "glossary" | "decisions" | "artifacts") =>
         addresses.knowledge(ws, project?.key ?? null, kind),
       /** A page tree's, glossary's, Decisions' or Artifacts' page of a Project, by its id, or of the Workspace. */
@@ -116,7 +123,7 @@ export function useAddresses() {
       transcript: (transcript: { slug: string }) => addresses.transcript(ws, transcript.slug),
       search: (query: string) => addresses.search(ws, query),
     };
-  }, [workspace, projects]);
+  }, [workspace, projects, ticketsView]);
 }
 
 export type Addresses = ReturnType<typeof useAddresses>;

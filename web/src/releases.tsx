@@ -43,7 +43,7 @@ export function ProjectReleases({
   return (
     <div className="page">
       <PageHead
-        crumbs={[workspaceCrumb(workspace), { label: <span className="mono">{project.key}</span>, to: to.project(project) }]}
+        crumbs={[workspaceCrumb(workspace), { label: <span className="mono">{project.key}</span>, to: to.tickets(project) }]}
         title="Releases"
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={

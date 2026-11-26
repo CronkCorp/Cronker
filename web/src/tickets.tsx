@@ -240,7 +240,7 @@ export function TicketScreen({
       <PageHead
         crumbs={[
           workspaceCrumb(workspace),
-          { label: <span className="mono">{project.key}</span>, to: to.project(project) },
+          { label: <span className="mono">{project.key}</span>, to: to.tickets(project) },
           { label: <span className="mono">{ticket.key}</span> },
         ]}
         title={
