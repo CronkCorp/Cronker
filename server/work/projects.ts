@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { accessIn, archivedRefusal, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessIn, accessOf, archivedRefusal, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
 import { dropAutonomousEntries } from "../pipeline/merge-queue.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
@@ -59,7 +59,14 @@ export type ProjectSummary = Static<typeof ProjectSummary>;
 export const Project = Type.Object({
   ...ProjectSummary.properties,
   newTicketsDelegated: Type.Boolean({
-    description: "Whether new Tickets start delegated to their creator's first Agent, assigning them. Off by default.",
+    description:
+      "Whether new Tickets start delegated, to the default Agent or else their creator's first Agent, assigning the " +
+      "Agent's Owner. Off by default.",
+  }),
+  defaultAgentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description:
+      "The Agent new Tickets start delegated to while they start delegated, assigning its Owner; null for their " +
+      "creator's first Agent. A removed Agent, or one without Write in the Project, is passed over for the creator's.",
   }),
   autonomousDelegationDefault: Type.Boolean({
     description: "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it already. Off by default.",
@@ -150,7 +157,7 @@ export async function findProject(
   const view = inReach(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, "$2");
   const { rows } = await db.query<Omit<Project, "statuses">>(
     `select ${summaryColumns(viewer, "$2")}, projects.new_tickets_delegated as "newTicketsDelegated",
-       projects.autonomous_delegation_default as "autonomousDelegationDefault",
+       projects.default_agent_id as "defaultAgentId", projects.autonomous_delegation_default as "autonomousDelegationDefault",
        projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge",
        projects.concise_reports as "conciseReports"
      from projects where projects.id = $1 and ${view.sql}
@@ -218,6 +225,7 @@ export async function createProject(
     return {
       ...project,
       newTicketsDelegated: false,
+      defaultAgentId: null,
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
       agentsMayMerge: false,
@@ -240,7 +248,14 @@ export type ProjectCreate = Static<typeof ProjectCreate>;
 /** The settings a User changes on a Project: the edit route's body. */
 export const ProjectEdit = Type.Object({
   newTicketsDelegated: Type.Optional(
-    Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
+    Type.Boolean({ description: "Whether new Tickets start delegated to the default Agent or their creator's first Agent." }),
+  ),
+  defaultAgentId: Type.Optional(
+    Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+      description:
+        "The Agent new Tickets start delegated to, assigning its Owner: an Agent of the Workspace in use with Write in " +
+        "the Project. Null for their creator's first Agent.",
+    }),
   ),
   autonomousDelegationDefault: Type.Optional(
     Type.Boolean({
@@ -284,13 +299,18 @@ export async function editProject(
     }
     const next = {
       newTicketsDelegated: edit.newTicketsDelegated ?? project.newTicketsDelegated,
+      defaultAgentId: edit.defaultAgentId === undefined ? project.defaultAgentId : edit.defaultAgentId,
       autonomousDelegationDefault: edit.autonomousDelegationDefault ?? project.autonomousDelegationDefault,
       pullRequestAutomation: edit.pullRequestAutomation ?? project.pullRequestAutomation,
       agentsMayMerge: edit.agentsMayMerge ?? project.agentsMayMerge,
       conciseReports: edit.conciseReports ?? project.conciseReports,
     };
+    if (next.defaultAgentId !== null && next.defaultAgentId !== project.defaultAgentId) {
+      await requireDefaultAgent(tx, project, next.defaultAgentId);
+    }
     if (
       next.newTicketsDelegated !== project.newTicketsDelegated ||
+      next.defaultAgentId !== project.defaultAgentId ||
       next.autonomousDelegationDefault !== project.autonomousDelegationDefault ||
       next.pullRequestAutomation !== project.pullRequestAutomation ||
       next.agentsMayMerge !== project.agentsMayMerge ||
@@ -298,7 +318,7 @@ export async function editProject(
     ) {
       await tx.query(
         `update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3, pull_request_automation = $4,
-           agents_may_merge = $5, concise_reports = $6
+           agents_may_merge = $5, concise_reports = $6, default_agent_id = $7
          where id = $1`,
         [
           project.id,
@@ -307,6 +327,7 @@ export async function editProject(
           next.pullRequestAutomation,
           next.agentsMayMerge,
           next.conciseReports,
+          next.defaultAgentId,
         ],
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
@@ -320,6 +341,59 @@ export async function editProject(
     }
     return (await findProject(tx, viewer, project.id))!;
   });
+}
+
+/**
+ * The Project's default Agent as new Tickets start delegated to it, with its Owner, while it is still in use and would
+ * have Write in the Project; otherwise nothing. Held like any Delegate, so it isn't removed meanwhile.
+ */
+export async function usableDefaultAgent(
+  tx: Tx,
+  project: { workspaceId: string; id: string; defaultAgentId: string | null },
+): Promise<{ id: string; ownerId: string } | null> {
+  if (project.defaultAgentId === null) return null;
+  const { rows } = await tx.query<{ id: string; ownerId: string }>(
+    `select id, owner_id as "ownerId" from agents
+     where id = $1 and workspace_id = $2 and removed_at is null for share`,
+    [project.defaultAgentId, project.workspaceId],
+  );
+  const agent = rows[0];
+  if (!agent) return null;
+  return (await agentWritesIn(tx, agent, { workspaceId: project.workspaceId, projectId: project.id })) ? agent : null;
+}
+
+/**
+ * Whether the Agent would have Write in the Project when running there: the least of the Project's Agent Access and
+ * its Owner's Access, as a Run's token is Write.
+ */
+export async function agentWritesIn(
+  tx: Tx,
+  agent: { id: string; ownerId: string },
+  place: { workspaceId: string; projectId: string },
+): Promise<boolean> {
+  const viewer: Viewer = {
+    kind: "agent",
+    id: agent.id,
+    workspace: { id: place.workspaceId },
+    owner: { id: agent.ownerId },
+    access: "write",
+  };
+  return (await accessOf(tx, viewer, place)) === "write";
+}
+
+/** Refuses a default Agent that isn't an Agent of the Project's Workspace in use with Write in the Project. */
+async function requireDefaultAgent(tx: Tx, project: Project, agentId: string): Promise<void> {
+  if (!(await usableDefaultAgent(tx, { ...project, defaultAgentId: agentId }))) {
+    throw new ApiError(
+      409,
+      "default_agent_unavailable",
+      "The default Agent must be an Agent of this Workspace, not removed, with Write in this Project.",
+      {
+        rule: "New Tickets start delegated only to an Agent that could work on them.",
+        advice: "Pick another Agent, or give this one's Owner and the Project's Agent Access Write.",
+      },
+    );
+  }
 }
 
 export async function insertStatus(
