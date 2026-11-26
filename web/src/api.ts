@@ -163,6 +163,8 @@ export interface TicketFilter {
   label?: string;
   /** A Release's name, or `none`. */
   release?: string;
+  /** Archived Tickets listed with the rest (`include`) or alone (`only`); left out when not given. */
+  archived?: "include" | "only";
 }
 
 /** Where an Attachment downloads from, which Markdown's `attachment:<id>` resolves to. */
@@ -433,6 +435,8 @@ export const api = {
     call<Transcript>("POST", `/api/transcripts/${encodeURIComponent(id)}/redactions`, { text } satisfies RedactionCreate),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
+  archiveTicket: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/archive`),
+  unarchiveTicket: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/unarchive`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string, access: "write" | "full" = "write") =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId, access } satisfies RequestApproval),
@@ -502,7 +506,7 @@ export const api = {
     call<DecisionVersionWithBody>("GET", `${decision(id)}/versions/${number}`),
   compareDecisionVersions: (id: string, from: number, to: number) =>
     call<DecisionComparison>("GET", `${decision(id)}/versions/compare?from=${from}&to=${to}`),
-  search: (workspaceId: string, query: { q: string; project?: string }) =>
+  search: (workspaceId: string, query: { q: string; project?: string; includeArchived?: "true" }) =>
     call<SearchResult[]>(
       "GET",
       `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${new URLSearchParams({ ...query })}`,

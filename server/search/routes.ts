@@ -86,7 +86,7 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Search the Workspace",
           description:
             `Tickets, knowledge and Transcripts of the Workspace matching \`q\`, best first with Transcripts last, ` +
-            `at most ${perKind} of each kind, leaving out whatever the caller can't read, and an archived Project's unless \`project\` names it. A Transcript matches by an entry whose text has the whole search. ` +
+            `at most ${perKind} of each kind, leaving out whatever the caller can't read, an archived Project's unless \`project\` names it, and archived Tickets unless \`includeArchived\` asks for them. A Transcript matches by an entry whose text has the whole search. ` +
             "Words match by their stem in English " +
             "(\"merging\" finds \"merged\"), written in web-search syntax.",
           params: Type.Object({ workspaceId: Type.String() }),
@@ -105,6 +105,9 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
                 description: `Only these kinds, comma-separated: ${searchKinds.map((k) => `\`${k}\``).join(", ")}.`,
               }),
             ),
+            includeArchived: Type.Optional(
+              Type.Boolean({ description: "Finds archived Tickets too, each marked `archived`; left out by default." }),
+            ),
           }),
           response: { 200: Type.Array(SearchResult), 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },
@@ -113,7 +116,7 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
         const caller = await requireCaller(context, request);
         const workspace = await findWorkspace(db, caller, request.params.workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
-        const { q, project: projectId, kinds } = request.query;
+        const { q, project: projectId, kinds, includeArchived } = request.query;
         let project: string | null = null;
         if (projectId !== undefined) {
           const found = await findProject(db, caller, projectId);
@@ -124,6 +127,7 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           q,
           project,
           kinds: kinds === undefined ? [...searchKinds] : (kinds.split(",") as SearchKind[]),
+          includeArchived,
         });
       },
     );

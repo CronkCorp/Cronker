@@ -94,6 +94,7 @@ describe("Search", () => {
         ticketKey: "CRONK-1",
         slug: null,
         number: null,
+        archived: false,
         snippet: [
           { text: "Merging", match: true },
           { text: " a branch loses its labels.", match: false },
@@ -141,6 +142,7 @@ describe("Search", () => {
       ticketKey: "CRONK-1",
       slug: report.slug,
       number: null,
+      archived: false,
       snippet: [
         { text: "The ", match: false },
         { text: "deployment", match: true },
@@ -155,6 +157,7 @@ describe("Search", () => {
       ticketKey: null,
       slug: null,
       number: null,
+      archived: false,
       snippet: [
         { text: "A ", match: false },
         { text: "deployed", match: true },
@@ -196,6 +199,7 @@ describe("Search", () => {
         ticketKey: null,
         slug: byTitle.slug,
         number: null,
+        archived: false,
         snippet: [
           { text: "Dragging", match: true },
           { text: " cards", match: false },
@@ -209,6 +213,7 @@ describe("Search", () => {
         ticketKey: null,
         slug: byDescription.slug,
         number: null,
+        archived: false,
         snippet: [
           { text: "Tokens to ", match: false },
           { text: "drag", match: true },
@@ -247,6 +252,7 @@ describe("Search", () => {
         ticketKey: "CRONK-1",
         slug: transcript.slug,
         number: null,
+        archived: false,
         snippet: [
           { text: "The webhook fires before the ", match: false },
           { text: "deploy", match: true },
@@ -273,6 +279,7 @@ describe("Search", () => {
       ticketKey: null,
       slug: own.slug,
       number: null,
+      archived: false,
       snippet: [
         { text: "Why does the ", match: false },
         { text: "webhook", match: true },

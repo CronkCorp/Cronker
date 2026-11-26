@@ -19,7 +19,7 @@ What a web address, the HTTP API and the MCP tools name a thing by in place of i
 _Avoid_: Alias, handle, permalink
 
 **Project**:
-The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived. Meanwhile its Tickets leave the Inbox and its work is left out of search unless the search names the Project. An archived Project spends nothing: archiving stops its running Runs, as Cronk's Change on each Ticket, and its delegated Tickets wait, passed by in their Runners' queues, until unarchiving starts them again in queue order.
+The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it; archiving a single Ticket is something else (Archived Ticket). GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived. Meanwhile its Tickets leave the Inbox and its work is left out of search unless the search names the Project. An archived Project spends nothing: archiving stops its running Runs, as Cronk's Change on each Ticket, and its delegated Tickets wait, passed by in their Runners' queues, until unarchiving starts them again in queue order.
 _Avoid_: Board, space, repo
 
 ### Work
@@ -51,6 +51,10 @@ _Avoid_: Dependency, link
 **Discovered Ticket**:
 A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee (or, filed outside a Run, the Agent's Owner), recording its source Ticket and Run, and waits in their Inbox until a User delegates, moves or dismisses it. Until then the Agent that filed it may edit it, add blocks from it, link Documents and Artifacts to it and unlink them (such as the spec it was filed from), and split it into Sub-Tickets, which are Discovered Tickets too but wait with it rather than in the Inbox: settling it settles them, and delegating it hands them the Delegation.
 _Avoid_: Follow-up, spin-off, finding
+
+**Archived Ticket**:
+A Ticket in a Done or Canceled Status that a User, or an Agent with a Full token as its Owner's act, has **archived** to clear it off the board, the Ticket lists, its Release's counts and search, which find it only when asked to include archived Tickets. It stays readable by its key and address with everything it holds, and keeps its Status, Assignee, Delegation, Relations and Runs; it isn't moved or tagged with a Release until a User **unarchives** it, which returns it as it was. Not the same as archiving its Project, which makes the whole Project read-only.
+_Avoid_: Hidden, deleted, closed
 
 **Step**:
 The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User. Done and Canceled Statuses never have one, so finished or canceled work gets no Runs. Changing a Project's Statuses and Steps needs Write in it; an Agent gives a Status a Step or changes one only when its Owner is an Admin.

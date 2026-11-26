@@ -525,6 +525,16 @@ function Filters({
         value={filter.release}
         onChange={(release) => set({ release })}
       />
+      <FilterPicker
+        label="Archived"
+        anyLabel="Not archived"
+        options={[
+          { value: "include", label: "Archived too" },
+          { value: "only", label: "Only archived" },
+        ]}
+        value={filter.archived}
+        onChange={(archived) => set({ archived: archived as TicketFilter["archived"] })}
+      />
     </div>
   );
 }
@@ -1381,6 +1391,7 @@ function List({
                       <StatusDot kind={status.kind} name={status.name} alone />
                       <span className="ticket-key">{ticket.key}</span> <span className="row-title">{ticket.title}</span>
                       <span className="row-meta">
+                        {ticket.archived && <Chip>Archived</Chip>}
                         <ReleaseChip release={ticket.release} />
                         {ticket.labels.map((label) => (
                           <Chip key={label}>{label}</Chip>

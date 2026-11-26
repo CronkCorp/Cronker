@@ -23,7 +23,7 @@ export const agentRights =
   "`move_ticket`, as its Owner's move: entering a Status with a Step starts its Run, and leaving a running one stops " +
   "it; edit every field of any Ticket it has Write on with `edit_ticket`, delegated or running included, delegating " +
   "only to its Owner's Agents and setting Autonomous Delegation; make Sub-Tickets of any Ticket and link Documents and " +
-  "Artifacts to it; dismiss Discovered Tickets with `dismiss_ticket`; and add any Relation with `add_relation` and " +
+  "Artifacts to it; dismiss Discovered Tickets with `dismiss_ticket`; archive and unarchive Done and Canceled Tickets with `archive_ticket` and `unarchive_ticket`; and add any Relation with `add_relation` and " +
   "remove one with `remove_relation`: each a Change by the Agent with no Run. It may also queue a Ticket in the Merge Queue and remove it " +
   "(`queue_merge`, `remove_from_queue`), Cronk's merge of what it queued completing the Ticket as Unverified; Cut " +
   "and Release a Release (`cut_release`, `publish_release`); answer a Run's Question (`answer_question`) and " +

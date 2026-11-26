@@ -4,16 +4,17 @@ import { usePlace } from "./frame.js";
 import { useLatest } from "./live.js";
 import { Link, navigate, usePath, useQuery } from "./router.js";
 import { EmptyState, FormError, PageHead, workspaceCrumb } from "./ui/controls.js";
-import { Key } from "./ui/labels.js";
+import { Chip, Key } from "./ui/labels.js";
 import { useAddresses, type Addresses } from "./addresses.js";
 
 /** How many results of each kind a search gives at most, as the API does. */
 const perKind = 20;
 
-/** Where a search of the Workspace shows its results, narrowed to a Project when one is given. */
-function searchPage(to: Addresses, q: string, project?: string): string {
+/** Where a search of the Workspace shows its results, narrowed to a Project when one is given, archived Tickets included when asked. */
+function searchPage(to: Addresses, q: string, project?: string, archived = false): string {
   const query = new URLSearchParams({ q });
   if (project) query.set("project", project);
+  if (archived) query.set("archived", "include");
   return to.search(`${query}`);
 }
 
@@ -76,6 +77,7 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
   const query = useQuery();
   const q = query.get("q") ?? "";
   const project = query.get("project") ?? "";
+  const archived = query.get("archived") === "include";
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
@@ -93,11 +95,11 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
       return;
     }
     latest(
-      api.search(workspace.id, project ? { q, project } : { q }),
+      api.search(workspace.id, { q, ...(project ? { project } : {}), ...(archived ? { includeArchived: "true" } : {}) }),
       setResults,
       (e) => setFailure(e.message),
     );
-  }, [workspace.id, q, project, latest]);
+  }, [workspace.id, q, project, archived, latest]);
 
   const keyOf = new Map(projects.map((p) => [p.id, p.key]));
   return (
@@ -106,7 +108,7 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
       <div className="filters" role="group" aria-label="Filters">
         <label className="filter">
           <span className="sr-only">Project</span>
-          <select value={project} onChange={(e) => navigate(searchPage(to, q, e.target.value || undefined))}>
+          <select value={project} onChange={(e) => navigate(searchPage(to, q, e.target.value || undefined, archived))}>
             <option value="">All Projects</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -114,6 +116,10 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
               </option>
             ))}
           </select>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={archived} onChange={(e) => navigate(searchPage(to, q, project || undefined, e.target.checked))} />
+          Include archived Tickets
         </label>
       </div>
       <FormError error={failure} />
@@ -139,6 +145,7 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
                       <li key={result.id} className="search-result">
                         <Link to={pageOf(to, result)} className="search-title">
                           {result.ticketKey && <Key>{result.ticketKey}</Key>} {result.title}
+                          {result.archived && <> <Chip>Archived</Chip></>}
                         </Link>
                         {result.projectId ? (
                           <span className="search-place">

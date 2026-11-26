@@ -195,6 +195,8 @@ export async function writeTicket(
   for (const key of differs) set(columns[key].column, patch[key], columns[key].cast);
   const statusChanged = differs.includes("statusId");
   if (statusChanged) set("status_entered_at", at);
+  // An archived Ticket stays in the Status it was archived in; anything moving it out of there unarchives it.
+  if (statusChanged) sets.push("archived_at = null, archived_by = null, archived_by_agent = null");
   if (differs.includes("assigneeId") && patch.assigneeId !== null && !differs.includes("formerAssigneeId")) {
     set("former_assignee_id", null);
   }

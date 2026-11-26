@@ -43,7 +43,7 @@ import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { fitWindow } from "./ui/fit-window.js";
-import { Actions, Button, CommentButton, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, CommentButton, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, ReleaseChip, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
@@ -223,6 +223,9 @@ export function TicketScreen({
   const others = projectTickets.filter((t) => t.id !== ticket.id);
   // With Read, the page offers nothing to change: no Comment box, editing or attaching (docs/ui.md).
   const canWrite = project.access === "write";
+  // A Ticket in a Done or Canceled Status is archived from its page head, once a User has Accepted it if a Run completed it.
+  const archivable =
+    !ticket.archived && (status?.kind === "done" || status?.kind === "canceled") && ticket.verification !== "unverified";
   const page = (
     <div
       className={`page ticket-page${dropping ? " dropping" : ""}`}
@@ -261,11 +264,31 @@ export function TicketScreen({
                   Edit
                 </Button>
               )}
+              {archivable && (
+                <Button variant="ghost" title="Takes it off the board, the List and search; it stays readable here" onClick={() => void apply(api.archiveTicket(ticket.id))}>
+                  Archive
+                </Button>
+              )}
             </>
           )
         }
       />
       <ProjectNote project={project} />
+      {ticket.archived && (
+        <Banner tone="warn" label="Archived">
+          <p>
+            This Ticket is archived: it is off the board, the List and search, and stays in {status?.name ?? "its Status"} until it is
+            unarchived.
+          </p>
+          {canWrite && (
+            <Actions>
+              <Button variant="secondary" size="small" onClick={() => void apply(api.unarchiveTicket(ticket.id))}>
+                Unarchive
+              </Button>
+            </Actions>
+          )}
+        </Banner>
+      )}
       <FormError error={error} />
       <div className="page-split">
         <div className="page ticket-main">
@@ -498,10 +521,12 @@ function Fields({
         value={status ? <StatusPill kind={status.kind} name={status.name} model={status.step?.model} /> : none}
         options={project.statuses.map((s) => ({ value: s.id, label: s.name, content: <StatusPill kind={s.kind} name={s.name} model={s.step?.model} /> }))}
         selected={[ticket.statusId]}
-        // An Unverified Ticket leaves its Done Status only by Accept or Reopen.
-        disabled={readOnly || ticket.verification === "unverified"}
+        // An Unverified Ticket leaves its Done Status only by Accept or Reopen, and an archived one only once unarchived.
+        disabled={readOnly || ticket.verification === "unverified" || ticket.archived}
         // The full name, which a long one only shows here, ellipsised in the pill.
-        title={ticket.verification === "unverified" ? "Accept or Reopen it to move it" : status?.name}
+        title={
+          ticket.verification === "unverified" ? "Accept or Reopen it to move it" : ticket.archived ? "Unarchive it to move it" : status?.name
+        }
         onPick={(statusId) => statusId !== ticket.statusId && void onSave({ statusId })}
       />
       <FieldPicker
@@ -1250,6 +1275,8 @@ const fieldNames: Record<
     | "sentBack"
     | "transcriptDeleted"
     | "runStopped"
+    | "archived"
+    | "unarchived"
     | RelationKind
   >,
   string
@@ -1398,6 +1425,8 @@ function described(change: Change): string {
     return `took ${pullRequestName((change.from as Queued).pullRequest)} out of the Merge Queue`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
+  if (change.field === "archived") return "archived it";
+  if (change.field === "unarchived") return "unarchived it";
   if (change.field === "transcriptDeleted") {
     const { step, agent } = change.from as TranscriptDeleted;
     return step ? `deleted the Transcript of the ${step} Run` : `deleted a Transcript of ${agent.name}'s session outside a Run`;
