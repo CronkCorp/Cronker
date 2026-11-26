@@ -524,6 +524,8 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0090_machine_model_mappings.sql");
     // Creating a Project writes its Steps' read-only setting.
     await cronk.applyAhead("0091_read_only_steps.sql");
+    // Creating a Runner writes its Allowed directories.
+    await cronk.applyAhead("0092_runner_allowed_directories.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
