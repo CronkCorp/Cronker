@@ -99,6 +99,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0091_read_only_steps.sql");
     // Adding a Runner writes its Allowed directories.
     await cronk.applyAhead("0092_runner_allowed_directories.sql");
+    // Reading a Project needs its default Agent.
+    await cronk.applyAhead("0093_project_default_agent.sql");
     // Reading a Ticket says whether it is archived.
     await cronk.applyAhead("0094_ticket_archiving.sql");
   }

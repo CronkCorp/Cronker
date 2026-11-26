@@ -332,7 +332,7 @@ export function ProjectScreen({
             {
               id: "delegation",
               label: "Delegation defaults",
-              children: <DelegationSettings project={project} onChange={setProject} />,
+              children: <DelegationSettings project={project} agents={agents} onChange={setProject} />,
             },
             { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} isAdmin={workspace.isAdmin} /> },
             {
@@ -1420,8 +1420,18 @@ function useProjectEdit(project: Project, onChange: (project: Project) => void) 
   return { error, busy, saved, toggle };
 }
 
-function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+function DelegationSettings({
+  project,
+  agents,
+  onChange,
+}: {
+  project: Project;
+  agents: Agent[];
+  onChange: (project: Project) => void;
+}) {
   const { error, busy, saved, toggle } = useProjectEdit(project, onChange);
+  // A default Agent since removed no longer shows among the Workspace's Agents, but stays the setting until changed.
+  const missing = project.defaultAgentId !== null && !agents.some((agent) => agent.id === project.defaultAgentId);
   return (
     <Panel
       title="Delegation defaults"
@@ -1435,8 +1445,24 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
           disabled={busy}
           onChange={(e) => void toggle({ newTicketsDelegated: e.target.checked })}
         />
-        New Tickets start delegated to their creator's Agent
+        New Tickets start delegated
       </label>
+      <Field label="Default Agent">
+        <select
+          aria-label="Default Agent"
+          value={project.defaultAgentId ?? ""}
+          disabled={busy || !project.newTicketsDelegated}
+          onChange={(e) => void toggle({ defaultAgentId: e.target.value === "" ? null : e.target.value })}
+        >
+          <option value="">The creator's first Agent</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}, {nameOf(agent.owner)}'s Agent
+            </option>
+          ))}
+          {missing && <option value={project.defaultAgentId!}>A removed Agent</option>}
+        </select>
+      </Field>
       <label className="check">
         <input
           type="checkbox"
