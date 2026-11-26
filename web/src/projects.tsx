@@ -260,9 +260,9 @@ export function ProjectScreen({
   const membersQuery = useQuery({ queryKey: keys.members(workspace.id), queryFn: () => api.members(workspace.id) });
   const agentsQuery = useQuery({ queryKey: keys.agents(workspace.id), queryFn: () => api.agents(workspace.id) });
   // Each filter's list has its own key under the Project's Tickets, so the events that refresh those refresh it; while
-  // a new filter's list loads, the last one stays on screen.
+  // a new filter's list loads, the last one stays on screen. Unfiltered, it is the Label filter's list below.
   const ticketsQuery = useQuery({
-    queryKey: [...keys.projectTickets(projectId), filter],
+    queryKey: keys.projectTicketList(projectId, filter),
     queryFn: () => api.tickets(projectId, filter),
     placeholderData: keepPreviousData,
   });

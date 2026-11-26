@@ -1,9 +1,9 @@
 // The Live invalidation table (seam 10): which loaded data each event of a Workspace's stream makes stale.
 import type { QueryKey } from "@tanstack/react-query";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { liveEventTypes } from "../../server/live/live.js";
 import type { StreamEvent } from "../../web/src/live.js";
-import { invalidations, keys } from "../../web/src/live-queries.js";
+import { coalescedInvalidation, invalidations, keys } from "../../web/src/live-queries.js";
 
 const p = "project-1";
 const t = "ticket-1";
@@ -160,5 +160,47 @@ test("whatever an Agent may have done refreshes the Agent Records, and the rest 
   // Only a User resolves a thread.
   for (const type of ["project.changed", "statuses.changed", "pull_requests.changed", "comment.changed"] as const) {
     expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(false);
+  }
+});
+
+test("the unfiltered board list is the Project's Tickets list itself, a filtered one sits under it", () => {
+  expect(keys.projectTicketList(p, {})).toEqual(keys.projectTickets(p));
+  expect(keys.projectTicketList(p, { label: undefined })).toEqual(keys.projectTickets(p));
+  const filtered = keys.projectTicketList(p, { label: "bug" });
+  expect(filtered).not.toEqual(keys.projectTickets(p));
+  expect(covers(keys.projectTickets(p), filtered)).toBe(true);
+});
+
+test("a burst of events invalidates each key once, after the wait", () => {
+  vi.useFakeTimers();
+  try {
+    const invalidated: QueryKey[] = [];
+    const batch = coalescedInvalidation((key) => invalidated.push(key), 150);
+    for (let i = 0; i < 20; i++) {
+      batch.add(invalidations({ type: "ticket.changed", projectId: p, ticketId: `ticket-${i}` }));
+    }
+    expect(invalidated).toEqual([]);
+    vi.advanceTimersByTime(150);
+    expect(invalidated.filter((key) => JSON.stringify(key) === JSON.stringify(keys.projectTickets(p)))).toHaveLength(1);
+    expect(invalidated.filter((key) => JSON.stringify(key) === JSON.stringify(keys.releases(p)))).toHaveLength(1);
+    expect(invalidated).toContainEqual(keys.ticket("ticket-0"));
+    expect(invalidated).toContainEqual(keys.ticket("ticket-19"));
+
+    // The wait runs from the first event, and a later burst is gathered afresh.
+    invalidated.length = 0;
+    batch.add([keys.inbox]);
+    vi.advanceTimersByTime(100);
+    batch.add([keys.inbox]);
+    vi.advanceTimersByTime(50);
+    expect(invalidated).toEqual([keys.inbox]);
+
+    // Cancelling drops what is pending.
+    invalidated.length = 0;
+    batch.add([keys.inbox]);
+    batch.cancel();
+    vi.advanceTimersByTime(500);
+    expect(invalidated).toEqual([]);
+  } finally {
+    vi.useRealTimers();
   }
 });

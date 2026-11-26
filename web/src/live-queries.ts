@@ -1,4 +1,5 @@
 import type { QueryKey } from "@tanstack/react-query";
+import type { TicketFilter } from "./api.js";
 import type { StreamEvent } from "./live.js";
 
 /**
@@ -20,6 +21,14 @@ export const keys = {
   pullRequests: (ticketId: string) => ["ticket", ticketId, "pullRequests"] as const,
   project: (projectId: string) => ["project", projectId, "fields"] as const,
   projectTickets: (projectId: string) => ["project", projectId, "tickets"] as const,
+  /**
+   * One filter's list of the Project's Tickets, under `projectTickets`. With no filter set it is `projectTickets`
+   * itself, the unfiltered list the Label filter reads too, so the board loads that list once rather than twice.
+   */
+  projectTicketList: (projectId: string, filter: TicketFilter) =>
+    Object.values(filter).some((value) => value)
+      ? (["project", projectId, "tickets", filter] as const)
+      : (["project", projectId, "tickets"] as const),
   /** A Project's Releases, with their counts and Tickets. */
   releases: (projectId: string) => ["project", projectId, "releases"] as const,
   /** Every Ticket's fields: renaming a Release changes what each of its Tickets shows. */
@@ -118,6 +127,37 @@ export function invalidations(event: StreamEvent): QueryKey[] {
     default:
       return unlisted(event);
   }
+}
+
+/**
+ * Gathers the keys events make stale and hands them to `invalidate` together, each once, `waitMs` after the first of
+ * them: a burst of events, such as one per Ticket of a bulk archive, then refetches each query once rather than once
+ * per event, each refetch cancelling the last. The wait runs from the first key, not the last, so a steady stream of
+ * events still refreshes the screen every `waitMs`.
+ */
+export function coalescedInvalidation(
+  invalidate: (queryKey: QueryKey) => void,
+  waitMs: number,
+): { add: (queryKeys: readonly QueryKey[]) => void; cancel: () => void } {
+  let pending = new Map<string, QueryKey>();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = () => {
+    timer = null;
+    const due = [...pending.values()];
+    pending = new Map();
+    for (const queryKey of due) invalidate(queryKey);
+  };
+  return {
+    add: (queryKeys) => {
+      for (const queryKey of queryKeys) pending.set(JSON.stringify(queryKey), queryKey);
+      timer ??= setTimeout(flush, waitMs);
+    },
+    cancel: () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      pending = new Map();
+    },
+  };
 }
 
 function unlisted(event: never): never {
