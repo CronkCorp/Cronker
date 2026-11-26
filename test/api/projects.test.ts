@@ -54,6 +54,7 @@ describe("creating a Project", () => {
       archivedAt: null,
       archivedBy: null,
       newTicketsDelegated: false,
+      defaultAgentId: null,
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
       agentsMayMerge: false,

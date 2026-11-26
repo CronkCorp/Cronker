@@ -126,4 +126,87 @@ describe("Projects whose new Tickets start delegated", () => {
 
     expect(ticket).toEqual(expect.objectContaining({ assigneeId: null, delegateId: null }));
   });
+  describe("with a default Agent", () => {
+    /** Ada's Project with new Tickets starting delegated, and Bea's Agent besides Ada's own. */
+    async function withBeasAgent() {
+      const setup = await adaWithTicket();
+      const bea = await addMember(cronk, setup.cookie, setup.workspace.id, "bea@example.com");
+      const beasAgent = await ok("POST", `/api/workspaces/${setup.workspace.id}/agents`, bea.cookie, { name: "bea-bot" });
+      await ok("PATCH", `/api/projects/${setup.project.id}`, setup.cookie, { newTicketsDelegated: true });
+      return { ...setup, bea, beasAgent };
+    }
+
+    test("is unset by default, and saves and reloads", async () => {
+      const { cookie, project, beasAgent } = await withBeasAgent();
+      expect(project.defaultAgentId).toBeNull();
+
+      const changed = await ok("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: beasAgent.id });
+      expect(changed.defaultAgentId).toBe(beasAgent.id);
+      expect((await ok("GET", `/api/projects/${project.id}`, cookie)).defaultAgentId).toBe(beasAgent.id);
+
+      const cleared = await ok("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: null });
+      expect(cleared.defaultAgentId).toBeNull();
+    });
+
+    test("takes a new Ticket, assigning its Owner; unset, the creator's first Agent takes it", async () => {
+      const { user, cookie, project, agent, bea, beasAgent } = await withBeasAgent();
+      await ok("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: beasAgent.id });
+
+      const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "To Bea's Agent" });
+      expect(ticket).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
+
+      // A Sub-Ticket still follows its parent's Delegation.
+      const sub = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "Half", parentId: ticket.id });
+      expect(sub).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
+
+      await ok("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: null });
+      const own = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "To Ada's Agent" });
+      expect(own).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: agent.id }));
+    });
+
+    test("is skipped for the creator's first Agent once it is removed", async () => {
+      const { user, cookie, project, agent, bea, beasAgent } = await withBeasAgent();
+      await ok("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: beasAgent.id });
+      expect((await cronk.request("DELETE", `/api/agents/${beasAgent.id}`, { cookie: bea.cookie })).status).toBe(204);
+
+      const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "Fallback" });
+
+      expect(ticket).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: agent.id }));
+    });
+
+    test("is skipped for the creator's first Agent once its Owner loses Write in the Project", async () => {
+      const { user, cookie, project, agent, bea, beasAgent } = await withBeasAgent();
+      await ok("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: beasAgent.id });
+      await ok("PUT", `/api/projects/${project.id}/access`, cookie, {
+        visibility: "open",
+        users: [{ userId: bea.user.id, level: "read" }],
+        agentAccess: "write",
+      });
+
+      const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "Fallback" });
+
+      expect(ticket).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: agent.id }));
+    });
+
+    test("must be an Agent in use with Write in the Project", async () => {
+      const { workspace, cookie, project, bea, beasAgent } = await withBeasAgent();
+      await ok("PUT", `/api/projects/${project.id}/access`, cookie, {
+        visibility: "open",
+        users: [{ userId: bea.user.id, level: "read" }],
+        agentAccess: "write",
+      });
+      const withoutWrite = await call("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: beasAgent.id });
+      expect(withoutWrite.status).toBe(409);
+      expect(withoutWrite.json.error.code).toBe("default_agent_unavailable");
+
+      const removed = await ok("POST", `/api/workspaces/${workspace.id}/agents`, cookie, { name: "gone" });
+      expect((await cronk.request("DELETE", `/api/agents/${removed.id}`, { cookie })).status).toBe(204);
+      const refused = await call("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: removed.id });
+      expect(refused.json.error.code).toBe("default_agent_unavailable");
+
+      const unknown = await call("PATCH", `/api/projects/${project.id}`, cookie, { defaultAgentId: crypto.randomUUID() });
+      expect(unknown.json.error.code).toBe("default_agent_unavailable");
+      expect((await ok("GET", `/api/projects/${project.id}`, cookie)).defaultAgentId).toBeNull();
+    });
+  });
 });

@@ -73,7 +73,7 @@ The User accountable for a Ticket. Always a User with Write in its Project, neve
 _Avoid_: Owner (reserved for Agents), responsible
 
 **Delegation**:
-A User's handing of a Ticket to one of their own Agents, its **Delegate**. Only a delegated Ticket gets Runs; delegating an unassigned Ticket assigns the delegating User. Each Project sets whether new Tickets start delegated. A Delegate needs Write in the Ticket's Project, the less of its Agent Access and its Owner's Access; losing it undelegates the Ticket.
+A User's handing of a Ticket to one of their own Agents, its **Delegate**. Only a delegated Ticket gets Runs; delegating an unassigned Ticket assigns the delegating User. Each Project sets whether new Tickets start delegated, and may name a default Agent for them, which assigns its Owner; without one, or once it is removed or lacks Write in the Project, the creator's first Agent takes them, assigning the creator. A Delegate needs Write in the Ticket's Project, the less of its Agent Access and its Owner's Access; losing it undelegates the Ticket.
 _Avoid_: Agent assignment, hand-off, dispatch
 
 **Autonomous Delegation**:
