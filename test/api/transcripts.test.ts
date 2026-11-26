@@ -525,7 +525,7 @@ describe("a Run's Transcript", () => {
     // Creating a Runner writes its Allowed directories.
     await cronk.applyAhead("0092_runner_allowed_directories.sql");
     // Reading a Ticket says whether it is archived.
-    await cronk.applyAhead("0093_ticket_archiving.sql");
+    await cronk.applyAhead("0094_ticket_archiving.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
