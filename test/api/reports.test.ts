@@ -88,6 +88,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0084_cost_estimates.sql");
     // Adding a Runner needs its allowlist.
     await cronk.applyAhead("0085_runner_allowlists.sql");
+    // And its allowed directories.
+    await cronk.applyAhead("0092_runner_allowed_directories.sql");
     // Reading whether a `local` Runner is offline needs its Machines' connections.
     await cronk.applyAhead("0082_machines.sql");
     await cronk.applyAhead("0088_machine_connections.sql");
