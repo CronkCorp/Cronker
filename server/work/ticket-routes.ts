@@ -15,7 +15,16 @@ import { placeOfDocument } from "../knowledge/documents.js";
 import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { placeOfComment, placeOfTicket } from "../knowledge/places.js";
 import { acceptTicket, Completion, completionOf, ReopenPreview, reopenPreview, reopenTicket, TicketReopen } from "./verification.js";
-import { addRelation, Relation, RelationCreate, relationsOf, removeRelation, TicketRelations } from "./relations.js";
+import {
+  addRelation,
+  closeAsDuplicate,
+  DuplicateClose,
+  Relation,
+  RelationCreate,
+  relationsOf,
+  removeRelation,
+  TicketRelations,
+} from "./relations.js";
 import {
   createTicket,
   dismissTicket,
@@ -417,7 +426,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Tickets"],
           summary: "A Ticket's Relations, parent and Sub-Tickets",
           description:
-            "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other. Agents may read them too.",
+            "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other, was closed as a " +
+            "duplicate of it (`duplicateOf`), or the other was closed as a duplicate of it (`duplicatedBy`). Agents may read them too.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: TicketRelations, 401: ErrorBody, 404: ErrorBody },
         },
@@ -436,7 +446,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Relate a Ticket to another",
           description:
             "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace, " +
-            "named by its id or its key. An Agent with a Full token adds any Relation, as its Owner would; any other " +
+            "named by its id or its key; a duplicate is made by closing a Ticket as one (`/duplicate`). An Agent with a Full token adds any Relation, as its Owner would; any other " +
             "Agent adds only blocks (`agent_adds_only_blocks`), and only where " +
             "one of the two Tickets is a Discovered Ticket it filed that still waits for a User " +
             "(`not_your_discovered_ticket`): from it to any Ticket, or to it from any Ticket.",
@@ -448,6 +458,32 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const caller = await requireCaller(context, request);
         return reply.code(201).send(await addRelation(context, caller, request.params.ticketId, request.body));
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/duplicate",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Close a Ticket as a duplicate of another",
+          description:
+            "Closes this Ticket as a duplicate of another Ticket of the same Workspace, the original, named by its id or " +
+            "its key: it relates the two (`duplicateOf` on this Ticket, `duplicatedBy` on the original) and moves this " +
+            "Ticket to its Project's first Canceled Status, stopping its running Run, in one step. Needs Write in both " +
+            "Tickets' Projects. Refused for a Ticket already in a Done or Canceled Status (`ticket_finished`), the " +
+            "Ticket itself (`relation_to_itself`) and an original that is itself closed as a duplicate " +
+            "(`original_is_duplicate`). An Agent with a Full token closes as its Owner would, a Change by the Agent " +
+            "with no Run; any other Agent gets `full_token_needed`, as Agents never enter Canceled. Removing the " +
+            "Relation later leaves the Ticket where it is.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: DuplicateClose,
+          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        return closeAsDuplicate(context, caller, request.params.ticketId, request.body);
       },
     );
 

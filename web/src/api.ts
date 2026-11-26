@@ -67,7 +67,7 @@ import type { Change } from "../../server/work/changes.js";
 import type { Comment, CommentCreate, DocumentCommentCreate } from "../../server/work/comments.js";
 import type { ArtifactMention, DecisionMention, Mention, TermMention, TicketMention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
-import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
+import type { DuplicateClose, Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type { LabelRule, Outcome, Step, StepKind } from "../../server/work/steps.js";
 import type {
   MentioningText,
@@ -408,6 +408,8 @@ export const api = {
     call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
   relate: (ticketId: string, input: RelationCreate) =>
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
+  closeAsDuplicate: (ticketId: string, input: DuplicateClose) =>
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/duplicate`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),

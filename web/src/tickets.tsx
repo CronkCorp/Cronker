@@ -16,6 +16,7 @@ import {
   type Priority,
   type Project,
   type PullRequest,
+  type RelationCreate,
   type RelationKind,
   type Report,
   type Run,
@@ -348,6 +349,11 @@ export function TicketScreen({
             relations={relations}
             suggestions={others}
             onParent={(parentId) => save({ parentId })}
+            onDuplicate={async (ticketKey) => {
+              // Thrown errors show in the Relations form; the closed Ticket replaces the one shown.
+              const closed = await api.closeAsDuplicate(ticket.id, { ticketKey });
+              await apply(Promise.resolve(closed));
+            }}
             onChanged={() => {
               loadLinks();
               loadTimeline();
@@ -894,12 +900,23 @@ function MergeQueueCard({
 }
 
 const relationGroups: { kind: RelationKind; label: string }[] = [
+  { kind: "duplicateOf", label: "Duplicate of" },
+  { kind: "duplicatedBy", label: "Duplicated by" },
   { kind: "blockedBy", label: "Blocked by" },
   { kind: "blocks", label: "Blocks" },
   { kind: "relatesTo", label: "Relates to" },
 ];
 
-const relationLabel = (kind: RelationKind) => relationGroups.find((g) => g.kind === kind)!.label;
+/** What the form adds: a Relation, or `duplicateOf`, which closes the Ticket as a duplicate of the one named. */
+type AddedKind = RelationCreate["kind"] | "duplicateOf";
+const addedKinds: { kind: AddedKind; label: string }[] = [
+  { kind: "blockedBy", label: "Blocked by" },
+  { kind: "blocks", label: "Blocks" },
+  { kind: "relatesTo", label: "Relates to" },
+  { kind: "duplicateOf", label: "Duplicate of (closes it)" },
+];
+
+const relationLabel = (kind: AddedKind) => addedKinds.find((g) => g.kind === kind)!.label;
 
 function TicketLink({ ticket }: { ticket: TicketRef }) {
   const to = useAddresses();
@@ -916,6 +933,7 @@ function Relations({
   relations,
   suggestions,
   onParent,
+  onDuplicate,
   onChanged,
 }: {
   ticket: Ticket;
@@ -923,15 +941,18 @@ function Relations({
   /** Tickets to offer as the parent, and while typing a key; any Ticket of the Workspace may be named. */
   suggestions: TicketSummary[];
   onParent: (parentId: string | null) => Promise<void>;
+  /** Closes the Ticket as a duplicate of the one with this key. */
+  onDuplicate: (ticketKey: string) => Promise<void>;
   onChanged: () => void;
 }) {
   const [removeError, setRemoveError] = useState<string | null>(null);
   const canWrite = useCanWrite();
   // Kept after adding, for adding several of one kind in a row.
-  const [kind, setKind] = useState<RelationKind>("blockedBy");
+  const [kind, setKind] = useState<AddedKind>("blockedBy");
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     const ticketKey = field(form, "ticket").trim();
-    await api.relate(ticket.id, { kind, ticketKey });
+    if (kind === "duplicateOf") await onDuplicate(ticketKey);
+    else await api.relate(ticket.id, { kind, ticketKey });
     (element.elements.namedItem("ticket") as HTMLInputElement).value = "";
     onChanged();
   });
@@ -1011,9 +1032,9 @@ function Relations({
           <div className="side-form-row">
             <Picker
               label="Relation"
-              options={relationGroups.map(({ kind, label }) => ({ value: kind, label }))}
+              options={addedKinds.map(({ kind, label }) => ({ value: kind, label }))}
               selected={[kind]}
-              onPick={(picked) => setKind(picked as RelationKind)}
+              onPick={(picked) => setKind(picked as AddedKind)}
               trigger={
                 <Button size="small" aria-haspopup="listbox" aria-label={`Relation ${relationLabel(kind)}`}>
                   {relationLabel(kind)} <span aria-hidden="true">▾</span>
@@ -1277,6 +1298,8 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
   blocks: { added: "marked this as blocking", removed: "removed that this blocks" },
   blockedBy: { added: "marked this blocked by", removed: "removed the blocker" },
   relatesTo: { added: "related this to", removed: "removed the relation to" },
+  duplicateOf: { added: "closed this as a duplicate of", removed: "removed that this duplicates" },
+  duplicatedBy: { added: "closed as a duplicate of this", removed: "removed the duplicate" },
 };
 
 /**

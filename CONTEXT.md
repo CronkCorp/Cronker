@@ -45,7 +45,7 @@ A Ticket that splits up part of a parent Ticket's work, in the same Project, inh
 _Avoid_: Subtask, child issue
 
 **Relation**:
-A link between two Tickets: one **blocks** the other, or they **relate to** each other. Blocking never forms a cycle; a blocked Ticket gets no Runs.
+A link between two Tickets: one **blocks** the other, they **relate to** each other, or one is a **duplicate of** the other, its original. Blocking never forms a cycle; a blocked Ticket gets no Runs. A duplicate is made only by closing a Ticket as one, which moves it to Canceled, so only Users and Full tokens make it; its original is never itself a duplicate.
 _Avoid_: Dependency, link
 
 **Discovered Ticket**:

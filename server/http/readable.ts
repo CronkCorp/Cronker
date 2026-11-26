@@ -39,6 +39,7 @@ const parameterKinds: Record<string, ReadableKind> = {
 const bodyKinds: Record<string, Record<string, ReadableKind>> = {
   "POST /api/projects/:projectId/tickets": { parentId: "ticket" },
   "POST /api/tickets/:ticketId/relations": { ticketId: "ticket" },
+  "POST /api/tickets/:ticketId/duplicate": { ticketId: "ticket" },
   "POST /api/tickets/:ticketId/documents": { documentId: "document" },
   "POST /api/tickets/:ticketId/artifacts": { artifactId: "artifact" },
   "POST /api/workspaces/:workspaceId/documents": { parentId: "document" },
