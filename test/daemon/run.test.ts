@@ -703,10 +703,13 @@ describe("cronk-runner run", () => {
         ),
       ).toEqual([]);
       await eventually(async () => (await processRecords()).length === 0);
-      // `cronk-runner logs` sees it ended, rather than running on.
-      expect(
-        (await readRunRecord(join(home, "runs", "history"), run.id))?.endedAt,
-      ).toEqual(expect.any(String));
+      // `cronk-runner logs` sees it ended, rather than running on. The daemon ends the history record
+      // just after removing the process record, so it is waited for rather than read once.
+      await eventually(
+        async () =>
+          typeof (await readRunRecord(join(home, "runs", "history"), run.id))
+            ?.endedAt === "string",
+      );
     } finally {
       last.kill("SIGKILL");
     }

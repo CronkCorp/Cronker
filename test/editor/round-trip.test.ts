@@ -53,6 +53,23 @@ function insideBlock(doc: Node, index: number): number | null {
   return found;
 }
 
+// The blocks the "edit to one block" test edits. Each edit saves and reopens
+// the whole document, so editing every block costs blocks × document size;
+// a large doc edits a fixed sample instead: the first, middle and last
+// editable blocks and evenly spaced ones between, so its cost grows only
+// with the document's size. A short doc still edits every block.
+const sampledBlocks = 12;
+
+function blocksToEdit(doc: Node): number[] {
+  const editable: number[] = [];
+  for (let i = 0; i < doc.childCount; i++) if (insideBlock(doc, i) !== null) editable.push(i);
+  if (editable.length <= sampledBlocks) return editable;
+  const picked = new Set([editable[0]!, editable[Math.floor(editable.length / 2)]!, editable.at(-1)!]);
+  const step = (editable.length - 1) / (sampledBlocks - 1);
+  for (let k = 0; k < sampledBlocks; k++) picked.add(editable[Math.round(k * step)]!);
+  return [...picked].sort((a, b) => a - b);
+}
+
 function edit(doc: Node, change: (state: EditorState) => EditorState["tr"]): Node {
   return change(EditorState.create({ doc })).doc;
 }
@@ -71,9 +88,9 @@ describe.each(samples)("$name", ({ markdown }) => {
 
   test("an edit to one block changes only that block", () => {
     const opened = openMarkdown(markdown);
-    opened.blocks.forEach(({ from, to }, index) => {
-      const pos = insideBlock(opened.doc, index);
-      if (pos === null) return;
+    for (const index of blocksToEdit(opened.doc)) {
+      const { from, to } = opened.blocks[index]!;
+      const pos = insideBlock(opened.doc, index)!;
       const saved = opened.save(edit(opened.doc, (state) => state.tr.insertText("Edited ", pos)));
       expect(saved.slice(0, from)).toBe(markdown.slice(0, from));
       expect(saved.slice(saved.length - (markdown.length - to))).toBe(markdown.slice(to));
@@ -81,11 +98,11 @@ describe.each(samples)("$name", ({ markdown }) => {
       expect(block).toContain("Edited");
       // A formatted block reads back as one block again, its edit included.
       // (A source block is written as typed, which may make it more blocks.)
-      if (opened.doc.child(index).type.name === "source_block") return;
+      if (opened.doc.child(index).type.name === "source_block") continue;
       const reopened = openMarkdown(saved);
       expect(reopened.doc.childCount).toBe(opened.doc.childCount);
       expect(reopened.doc.child(index).textContent).toContain("Edited");
-    });
+    }
   });
 
   test("the source mode round-trips", () => {
