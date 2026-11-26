@@ -126,6 +126,7 @@ describe("Projects whose new Tickets start delegated", () => {
 
     expect(ticket).toEqual(expect.objectContaining({ assigneeId: null, delegateId: null }));
   });
+
   describe("with a default Agent", () => {
     /** Ada's Project with new Tickets starting delegated, and Bea's Agent besides Ada's own. */
     async function withBeasAgent() {
