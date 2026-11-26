@@ -118,4 +118,4 @@ Ideas, not yet grilled.
 
 ## Not now
 
-Custom fields, Protected items and Suggestions, full Markdown export and import, Workspace-wide webhooks, email, a shared Triage view, other Git hosts, a second hostname for Artifacts.
+Custom fields, Protected items and Suggestions, full Markdown export and import, Workspace-wide webhooks, email, a shared Triage view, other Git hosts, a second hostname for Artifacts, an external cache such as Redis (ADR 0016).
