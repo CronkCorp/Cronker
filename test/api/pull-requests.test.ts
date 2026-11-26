@@ -1618,6 +1618,8 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.applyAhead("0090_machine_model_mappings.sql");
     // Creating a Project writes its Steps' read-only setting.
     await cronk.applyAhead("0091_read_only_steps.sql");
+    // Reading a Ticket says whether it is archived.
+    await cronk.applyAhead("0093_ticket_archiving.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
