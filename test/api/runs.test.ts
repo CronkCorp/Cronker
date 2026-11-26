@@ -448,6 +448,7 @@ describe("Runners and Agents", () => {
         managedAgents: null,
         budgetPerRun: null,
         allowedTools: null,
+        allowedDirectories: null,
         notForMachineModels: null,
         machineModels: null,
         costThisMonth: [],

@@ -111,6 +111,33 @@ test("a local Runner's allowed tools are edited on its card, kept on reload and 
   await expect(rules).toHaveValue(/^Bash\(git:\*\)\nBash\(npm:\*\)\n/);
 });
 
+test("a local Runner's allowed directories are saved from its card, and a relative path is refused", async ({ page, cronk }) => {
+  await setUp(cronk);
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/runners`);
+  const setup = page.getByRole("region", { name: "Set up a Runner" });
+  await setup.getByLabel("Runner name").fill("Laptop");
+  await setup.getByLabel("Kind").selectOption("local");
+  await setup.getByRole("button", { name: "Set up a local Runner" }).click();
+
+  const card = page.getByRole("region", { name: "Laptop" });
+  const section = card.getByRole("group", { name: "Allowed directories" });
+  const directories = section.getByRole("textbox", { name: "Allowed directories" });
+  await expect(directories).toHaveValue("");
+
+  await directories.fill("tmp");
+  await section.getByRole("button", { name: "Save allowed directories" }).click();
+  await expect(section.getByText(/isn't an absolute path/)).toBeVisible();
+
+  await directories.fill("/tmp/\n\n  /var/cache/builds  \n");
+  await section.getByRole("button", { name: "Save allowed directories" }).click();
+  await expect(section.getByText("Saved.")).toBeVisible();
+  await expect(directories).toHaveValue("/tmp\n/var/cache/builds");
+
+  await page.reload();
+  await expect(directories).toHaveValue("/tmp\n/var/cache/builds");
+});
+
 test("a local Run's cost shows as an estimate on its Ticket and its Runner's card", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   await signInInBrowser(page, cronk);

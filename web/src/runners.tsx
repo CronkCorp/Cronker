@@ -325,6 +325,7 @@ function RunnerSettings({
       </form>
       {runner.kind === "local" && <MachineModelMappings runner={runner} machines={machines} onChanged={onChanged} />}
       {runner.kind === "local" && <AllowedTools runner={runner} onChanged={onChanged} />}
+      {runner.kind === "local" && <AllowedDirectories runner={runner} onChanged={onChanged} />}
       {runner.kind === "subscription" && (
         <div className="runner-triggers">
           <h3>Triggers</h3>
@@ -608,7 +609,7 @@ function AllowedTools({ runner, onChanged }: { runner: Runner; onChanged: (runne
         <code>Bash(git:*)</code>. A Run that needs a tool outside the list fails, naming it: widen the list and Retry.
         Cronk's own tools (<code>mcp__cronk</code>) are always allowed. Runs on Claude have their edits accepted, and a
         Repository's committed Claude Code settings add their own rules. Runs on Machine models may read, search and edit
-        in their worktree, and get only the <code>Bash</code>, <code>WebFetch</code> and <code>WebSearch</code> rules;
+        in their worktree and the allowed directories, and get only the <code>Bash</code>, <code>WebFetch</code> and <code>WebSearch</code> rules;
         the Repository's settings add nothing.
       </p>
       <form onSubmit={onSubmit}>
@@ -642,6 +643,52 @@ function AllowedTools({ runner, onChanged }: { runner: Runner; onChanged: (runne
           </Button>
           <Button type="submit" disabled={busy}>
             Save allowed tools
+          </Button>
+        </Actions>
+      </form>
+    </div>
+  );
+}
+
+/**
+ * A `local` Runner's allowed directories: the absolute paths outside their worktrees its Runs may read and write, such
+ * as `/tmp`, one per line, saved for Runs claimed from then on.
+ */
+function AllowedDirectories({ runner, onChanged }: { runner: Runner; onChanged: (runner: Runner) => void }) {
+  const shown = (runner.allowedDirectories ?? []).join("\n");
+  const [text, setText] = useState(shown);
+  useEffect(() => setText(shown), [shown]);
+  const { save, busy, error, saved } = useSave();
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const directories = text.split("\n").map((line) => line.trim()).filter(Boolean);
+    void save(async () => onChanged(await api.setAllowedDirectories(runner.id, directories)));
+  };
+  return (
+    <div className="runner-allowlist" role="group" aria-label="Allowed directories">
+      <h3>Allowed directories</h3>
+      <p className="muted small">
+        The directories outside their worktree its Runs may read and write, one absolute path per line, such as{" "}
+        <code>/tmp</code>. Any other directory stays denied. All of the Runner's Runs share them, so one Run may read
+        what another left there. A read-only Step's Runs may read them but not edit.
+      </p>
+      <form onSubmit={onSubmit}>
+        <Field label="Allowed directories">
+          <textarea
+            name="allowedDirectories"
+            className="mono"
+            rows={Math.min(Math.max(text.split("\n").length, 2), 10)}
+            spellCheck={false}
+            placeholder="/tmp"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </Field>
+        <Actions>
+          <Saved shown={saved} />
+          <FormError error={error} />
+          <Button type="submit" disabled={busy}>
+            Save allowed directories
           </Button>
         </Actions>
       </form>

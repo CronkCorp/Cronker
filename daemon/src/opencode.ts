@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ClaimedRun } from "./api.js";
 import type { MachineModel } from "./config.js";
 import { keyOf } from "./models.js";
-import { capDeniedTools, type ProgramOutput, type RunProgram } from "./program.js";
+import { capDeniedTools, type ProgramOutput, type RunProgram, withRealPaths } from "./program.js";
 
 /**
  * OpenCode V2, the program a Run on a Machine model runs as: `opencode run --standalone --format json`, configured
@@ -16,7 +16,8 @@ import { capDeniedTools, type ProgramOutput, type RunProgram } from "./program.j
  *   read from an environment variable the config names, never from the arguments.
  * - Everything is denied, then reading, searching and editing inside the worktrees, Cronk's tools and the Runner's
  *   allowlist, translated, are allowed; a Run of a read-only Step is then denied edits. Paths outside the directory the Run works in are denied twice over: by `external_directory`,
- *   which OpenCode checks before a read or edit of one, and by denying absolute paths, as only those name one.
+ *   which OpenCode checks before a read or edit of one, and by denying absolute paths, as only those name one; the
+ *   Runner's allowed directories are then carved out of both.
  * - Policies, which only ever tighten, deny the same again, so an agent's rules from elsewhere can't widen them.
  * - A Repository's own `opencode.json` isn't loaded, and would rank below the inline config if it were.
  */
@@ -80,12 +81,23 @@ interface Rule {
 /** OpenCode's tools that edit files, which a Run of a read-only Step is denied whatever else allows them. */
 export const openCodeEditTools = ["edit", "write", "patch"];
 
+/** The rules opening the Runner's allowed directories: entering them, and reading and editing inside them. */
+function directoryRules(directories: readonly string[], effect: Effect): Rule[] {
+  return directories.flatMap((directory) => [
+    { action: "external_directory", resource: directory, effect },
+    { action: "external_directory", resource: `${directory}/*`, effect },
+    { action: "read", resource: `${directory}/*`, effect },
+    { action: "edit", resource: `${directory}/*`, effect },
+  ]);
+}
+
 /**
  * The Run's permissions, in order; the last rule matching wins. Denied first, everything; then what is allowed:
  * reading, searching and editing, Cronk's tools and the Runner's allowlist, translated; then what is denied whatever
- * came before: paths outside the worktrees, skills, removing OpenCode's worktrees and, for a read-only Step, edits.
+ * came before: paths outside the worktrees, skills and removing OpenCode's worktrees; then the Runner's allowed
+ * directories, opened again; last, for a read-only Step, edits, wherever they are.
  */
-export function permissionsOf(allowlist: readonly string[], readOnly = false): Rule[] {
+export function permissionsOf(allowlist: readonly string[], readOnly = false, directories: readonly string[] = []): Rule[] {
   const allow = (action: string, resource = "*"): Rule => ({ action, resource, effect: "allow" });
   const deny = (action: string, resource = "*"): Rule => ({ action, resource, effect: "deny" });
   const translation = translateAllowlist(allowlist);
@@ -105,6 +117,7 @@ export function permissionsOf(allowlist: readonly string[], readOnly = false): R
     deny("edit", "/*"),
     deny("skill"),
     deny("opencode_worktree_remove"),
+    ...directoryRules(directories, "allow"),
     ...(readOnly ? openCodeEditTools.map((tool) => deny(tool)) : []),
   ];
 }
@@ -114,10 +127,11 @@ export function permissionsOf(allowlist: readonly string[], readOnly = false): R
  * provider and Cronk's MCP server may be used, no skill or plugin, web search only when the allowlist allows it, and
  * every tool check is denied but those the permissions allow, which then decide.
  */
-export function policiesOf(allowlist: readonly string[], readOnly = false): Rule[] {
+export function policiesOf(allowlist: readonly string[], readOnly = false, directories: readonly string[] = []): Rule[] {
   const statement = (action: string, resource: string, effect: Effect): Rule => ({ action, resource, effect });
   const permissions = permissionsOf(allowlist, readOnly);
   const lifted = permissions.filter((rule) => rule.effect === "allow");
+  const opened = directoryRules(directories, "allow");
   const webSearch = lifted.some((rule) => rule.action === "websearch");
   return [
     statement("provider.use", "*", "deny"),
@@ -135,16 +149,25 @@ export function policiesOf(allowlist: readonly string[], readOnly = false): Rule
       "edit:/*",
       "skill:*",
       "opencode_worktree_remove:*",
-      ...(readOnly ? openCodeEditTools.map((tool) => `${tool}:*`) : []),
     ].map((resource) => statement("tool.use", resource, "deny")),
+    ...opened.map((rule) => statement("tool.use", `${rule.action}:${rule.resource}`, "allow")),
+    ...(readOnly ? openCodeEditTools.map((tool) => statement("tool.use", `${tool}:*`, "deny")) : []),
   ];
 }
 
 /** The model as `provider/model`, as OpenCode names it. */
 export const modelReference = (model: MachineModel) => `${providerId}/${model.modelId}`;
 
-/** OpenCode's whole config for a Run on the Machine model, as `OPENCODE_CONFIG_CONTENT` gives it. */
-export function openCodeConfig(model: MachineModel, claimed: ClaimedRun, hasKey: boolean) {
+/**
+ * OpenCode's whole config for a Run on the Machine model, as `OPENCODE_CONFIG_CONTENT` gives it, opening the
+ * directories given, the Runner's allowed directories as claimed unless their real paths are given too.
+ */
+export function openCodeConfig(
+  model: MachineModel,
+  claimed: ClaimedRun,
+  hasKey: boolean,
+  directories: readonly string[] = claimed.allowedDirectories ?? [],
+) {
   const reference = modelReference(model);
   return {
     $schema: "https://opencode.ai/config.json",
@@ -179,8 +202,8 @@ export function openCodeConfig(model: MachineModel, claimed: ClaimedRun, hasKey:
     share: "disabled",
     update: "disable",
     autoupdate: false,
-    permissions: permissionsOf(claimed.allowedTools, claimed.readOnly === true),
-    policies: policiesOf(claimed.allowedTools, claimed.readOnly === true),
+    permissions: permissionsOf(claimed.allowedTools, claimed.readOnly === true, directories),
+    policies: policiesOf(claimed.allowedTools, claimed.readOnly === true, directories),
   };
 }
 
@@ -308,7 +331,9 @@ export function openCode(model: MachineModel, command = "opencode"): RunProgram 
           ...env.workspace,
           HOME: home,
           ...xdg,
-          OPENCODE_CONFIG_CONTENT: JSON.stringify(openCodeConfig(model, claimed, key !== undefined)),
+          OPENCODE_CONFIG_CONTENT: JSON.stringify(
+            openCodeConfig(model, claimed, key !== undefined, await withRealPaths(claimed.allowedDirectories ?? [])),
+          ),
           // A Repository's own config can't change permissions or the server; nor are Claude Code's skills loaded.
           OPENCODE_DISABLE_PROJECT_CONFIG: "1",
           OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1",

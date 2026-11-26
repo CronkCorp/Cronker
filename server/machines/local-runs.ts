@@ -75,6 +75,11 @@ export const ClaimedRun = Type.Object({
       "The Runner's allowlist as it stood at the claim: the tools the Run may use without asking, for `claude " +
       "--allowedTools` with `--permission-mode acceptEdits`.",
   }),
+  allowedDirectories: Type.Array(Type.String(), {
+    description:
+      "The Runner's allowed directories as they stood at the claim: absolute paths outside the worktrees the Run may " +
+      "read and write, for `claude --add-dir`. A daemon too old to know the field opens none.",
+  }),
   readOnly: Type.Boolean({
     description:
       "Whether the Run's Step was read-only when the Run started: the program must refuse the Run's file edits, " +
@@ -113,12 +118,14 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       ticketId: string;
       projectId: string;
       allowedTools: string[] | null;
+      allowedDirectories: string[] | null;
       runnerId: string;
       runnerName: string;
       machineModel: string | null;
       readOnly: boolean;
     }>(
-      `select runs.state, runs.read_only as "readOnly", runners.allowed_tools as "allowedTools", runners.id as "runnerId", runners.name as "runnerName",
+      `select runs.state, runs.read_only as "readOnly", runners.allowed_tools as "allowedTools",
+         runners.allowed_directories as "allowedDirectories", runners.id as "runnerId", runners.name as "runnerName",
          ${mappedModelSql("runners", "runs")} as "machineModel", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
          projects.key || '-' || tickets.number as "ticketKey", tickets.id as "ticketId", tickets.project_id as "projectId"
        from runs join tickets on tickets.id = runs.ticket_id join projects on projects.id = tickets.project_id
@@ -211,6 +218,7 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
         token,
         mcpUrl: mcpResource(context),
         allowedTools: run.allowedTools ?? [],
+        allowedDirectories: run.allowedDirectories ?? [],
         readOnly: run.readOnly,
       },
       repositories: await repositoriesOf(tx, run.projectId, run.ticketId),
