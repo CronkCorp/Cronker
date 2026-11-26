@@ -210,6 +210,57 @@ describe("cronk-runner model", () => {
       expect(await saved()).toEqual(["qwen"]);
     });
 
+    test("a thinking model passes both checks, whether its server puts the reasoning in reasoning or reasoning_content", async () => {
+      for (const field of ["reasoning", "reasoning_content"] as const) {
+        // Far more reasoning than the old 64-token answer allowed, the marker only at its end.
+        server = await standInModelServer({ thinking: { tokens: 1000, field, noContent: true } });
+        const added = await add(`qwen-${field.replace("_", "-")}`, { ...flags(server.address), noKey: true });
+
+        expect(added.code).toBe(0);
+        expect(shown(added)).not.toMatch(/lost the marker|ran out of tokens|without calling the tool/);
+        const chats = server.requests.filter((r) => r.path === "/v1/chat/completions");
+        expect(chats).toHaveLength(2);
+        for (const chat of chats) expect((chat.body as { max_tokens: number }).max_tokens).toBeGreaterThanOrEqual(2000);
+        await server.stop();
+      }
+      server = undefined;
+      expect(await saved()).toEqual(["qwen-reasoning", "qwen-reasoning-content"]);
+    });
+
+    test("a thinking model cut off before it answers says the answer ran out of tokens, not that the context is small", async () => {
+      server = await standInModelServer({ thinking: { tokens: 10_000 } });
+      const added = await add("qwen", { ...flags(server.address), noKey: true }, "n");
+
+      expect(added.code).toBe(1);
+      const text = shown(added);
+      expect(text).toContain("before the model called the tool");
+      expect(text).toContain("read the whole prompt");
+      expect(text).toContain("ran out of tokens");
+      expect(text).toContain("reasons for less");
+      expect(text).not.toContain("lost the marker");
+      expect(text).not.toContain("smaller context");
+      expect(text).not.toContain("OLLAMA_CONTEXT_LENGTH");
+      expect(text).not.toContain("tool support");
+      expect(await saved()).toEqual([]);
+    });
+
+    test("a thinking model served with a smaller context still loses the marker and names Ollama's setting", async () => {
+      for (const tokens of [1000, 10_000]) {
+        // Whether it then answers or runs out of tokens, the server saw only 4096 of the prompt.
+        server = await standInModelServer({ loadedContext: 4096, thinking: { tokens } });
+        const added = await add("qwen", { ...flags(server.address), noKey: true }, "n");
+
+        const text = shown(added);
+        expect(text).toContain("lost the marker");
+        expect(text).toContain("the server saw 4096");
+        expect(text).toContain("OLLAMA_CONTEXT_LENGTH=32768");
+        expect(text).toContain("num_ctx");
+        expect(text).not.toContain("before giving the marker");
+        await server.stop();
+      }
+      server = undefined;
+    });
+
     test("a server that is down, or can't be reached, is a failed check like any other", async () => {
       server = await standInModelServer({ key: "sk-secret" });
       server.setUp(false);

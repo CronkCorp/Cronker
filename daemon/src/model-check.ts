@@ -19,7 +19,7 @@ export interface CheckFailure {
 }
 
 export interface CheckOptions {
-  /** How long the tool call may take; a minute when left out. */
+  /** How long the tool call may take, a thinking model's reasoning included; five minutes when left out. */
   toolsTimeoutMs?: number;
   /** How long the long prompt may take, which a local server reads slowly; five minutes when left out. */
   contextTimeoutMs?: number;
@@ -32,10 +32,24 @@ const contextShare = 0.85;
 /** Words that each cost one token in the tokenizers in use, so the prompt's size in tokens is about its word count. */
 const fillerWords = "the cat sat on the mat and the dog ran to the park in the sun".split(" ");
 
+/**
+ * The tokens each answer may take. A thinking model, such as Qwen3.5 or gpt-oss, reasons before it answers and counts
+ * its reasoning against this, so it is a few thousand rather than the few the answer itself needs.
+ */
+const answerTokens = 4096;
+/**
+ * The share of the long prompt's words the server must report reading (`usage.prompt_tokens`) to count as having read
+ * it whole. Loose, since each word is only about one token.
+ */
+const readWholeShare = 0.9;
+
 /** Ways to put each failure right. */
 const fixes = {
   reachable: "Start the server, or check the address and the key.",
   tools: "Use a model with tool support (function calling), served with it on.",
+  outOfTokens:
+    "Use a model that reasons for less before it answers, or turn its thinking down or off in the server's settings " +
+    "(such as Qwen3's /no_think, or a lower reasoning effort).",
   context: (contextSize: number) =>
     `Set Ollama's context to at least ${contextSize} tokens, with the environment variable OLLAMA_CONTEXT_LENGTH=${contextSize} ` +
     `or \`PARAMETER num_ctx ${contextSize}\` in a Modelfile (or your server's own context setting), and restart it; or give a smaller context size.`,
@@ -68,7 +82,7 @@ export async function checkModelWorks(model: MachineModel, key: string | undefin
   try {
     tools = await post(
       {
-        max_tokens: 256,
+        max_tokens: answerTokens,
         messages: [{ role: "user", content: "Call the tool get_time with the timezone UTC. Don't answer in text." }],
         tools: [
           {
@@ -81,7 +95,7 @@ export async function checkModelWorks(model: MachineModel, key: string | undefin
           },
         ],
       },
-      options.toolsTimeoutMs ?? 60_000,
+      options.toolsTimeoutMs ?? 5 * 60_000,
     );
   } catch (error) {
     return [{ check: "reachable", what: `The server can't be reached: ${(error as Error).message}.`, fix: fixes.reachable }];
@@ -90,9 +104,18 @@ export async function checkModelWorks(model: MachineModel, key: string | undefin
     return [{ check: "reachable", what: `The server answered ${tools.status}${serverMessage(tools, hide)}.`, fix: fixes.reachable }];
   }
   const failures: CheckFailure[] = [];
-  const toolCalls = (tools.json as { choices?: { message?: { tool_calls?: unknown[] } }[] })?.choices?.[0]?.message?.tool_calls;
+  const toolChoice = (tools.json as Answer)?.choices?.[0];
+  const toolCalls = toolChoice?.message?.tool_calls;
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
-    failures.push({ check: "tools", what: "The model answered without calling the tool it was asked to call.", fix: fixes.tools });
+    failures.push(
+      toolChoice?.finish_reason === "length"
+        ? {
+            check: "tools",
+            what: `The answer ran out of tokens (max_tokens ${answerTokens}) before the model called the tool it was asked to call.`,
+            fix: fixes.outOfTokens,
+          }
+        : { check: "tools", what: "The model answered without calling the tool it was asked to call.", fix: fixes.tools },
+    );
   }
 
   // 2. The marker at the start of a prompt close to the context size, asked back.
@@ -105,7 +128,7 @@ export async function checkModelWorks(model: MachineModel, key: string | undefin
   options.note?.("Checking the context size with a long prompt (this can take a few minutes)…");
   let context;
   try {
-    context = await post({ max_tokens: 64, messages: [{ role: "user", content: prompt }] }, options.contextTimeoutMs ?? 5 * 60_000);
+    context = await post({ max_tokens: answerTokens, messages: [{ role: "user", content: prompt }] }, options.contextTimeoutMs ?? 5 * 60_000);
   } catch (error) {
     failures.push({ check: "context", what: `The long prompt got no answer: ${(error as Error).message}.`, fix: fixes.context(model.contextSize) });
     return failures;
@@ -118,10 +141,23 @@ export async function checkModelWorks(model: MachineModel, key: string | undefin
     });
     return failures;
   }
-  const answer = context.json as { choices?: { message?: { content?: unknown } }[]; usage?: { prompt_tokens?: unknown } };
-  const content = answer?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.includes(marker)) {
+  const answer = context.json as Answer;
+  const choice = answer?.choices?.[0];
+  // A thinking model may give the marker in its reasoning, which servers put in `reasoning` or `reasoning_content`.
+  const texts = [choice?.message?.content, choice?.message?.reasoning, choice?.message?.reasoning_content];
+  if (!texts.some((text) => typeof text === "string" && text.includes(marker))) {
     const seen = answer?.usage?.prompt_tokens;
+    const readWhole = typeof seen === "number" && seen >= words * readWholeShare;
+    if (choice?.finish_reason === "length" && readWhole) {
+      failures.push({
+        check: "context",
+        what:
+          `The server read the whole prompt of about ${words} tokens, but the answer ran out of tokens ` +
+          `(max_tokens ${answerTokens}) before giving the marker.`,
+        fix: fixes.outOfTokens,
+      });
+      return failures;
+    }
     failures.push({
       check: "context",
       what:
@@ -133,6 +169,17 @@ export async function checkModelWorks(model: MachineModel, key: string | undefin
   }
   return failures;
 }
+
+/** The parts of a chat completion the checks read. */
+type Answer =
+  | {
+      choices?: {
+        message?: { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; tool_calls?: unknown[] };
+        finish_reason?: unknown;
+      }[];
+      usage?: { prompt_tokens?: unknown };
+    }
+  | undefined;
 
 function parse(text: string): unknown {
   try {
