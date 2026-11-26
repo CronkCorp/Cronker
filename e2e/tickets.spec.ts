@@ -203,3 +203,61 @@ test("close a Ticket as a duplicate of another from its Relations", async ({ pag
     page.getByRole("region", { name: "Relations" }).getByRole("list", { name: "Duplicated by" }).getByRole("link", { name: /CRONK-2 Night theme/ }),
   ).toBeVisible();
 });
+
+test("Ctrl+Enter saves a Ticket's edit form from its description, in either editing mode, and from its title", async ({ page, cronk }) => {
+  await signedInWithProject(page, cronk);
+  await newTicket(page, "Shortcut me");
+  await page.getByRole("region", { name: "Board" }).getByRole("link", { name: /CRONK-1 Shortcut me/ }).click();
+  await expect(page.getByRole("heading", { name: "CRONK-1 Shortcut me" })).toBeVisible();
+  let patches = 0;
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/tickets/*", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    patches += 1;
+    await held;
+    await route.fallback();
+  });
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  const description = page.getByRole("textbox", { name: "Description" });
+  const save = page.getByRole("button", { name: "Save" });
+  // Nothing changed, so nothing is saved.
+  await description.press("Control+Enter");
+  await expect(save).toBeDisabled();
+  // Enter starts a paragraph and Shift+Enter breaks the line.
+  await description.pressSequentially("First line");
+  await description.press("Enter");
+  await description.pressSequentially("second line");
+  await description.press("Shift+Enter");
+  await description.pressSequentially("third line");
+  await expect(description.locator("p")).toHaveCount(2);
+
+  // A second press while the save is busy saves nothing more.
+  await description.press("Control+Enter");
+  await expect(save).toBeDisabled();
+  await description.press("Control+Enter");
+  release();
+  await expect(save).toHaveCount(0);
+  await expect(page.locator(".markdown p", { hasText: "First line" })).toBeVisible();
+  await expect(page.locator(".markdown p", { hasText: "second line" }).locator("br")).toHaveCount(1);
+  expect(patches).toBe(1);
+
+  // From the Markdown source, the description is saved as written.
+  await page.getByRole("button", { name: "Edit" }).click();
+  // The edit form comes before the Comment box, which has its own switch.
+  await page.getByRole("group", { name: "Editing mode" }).first().getByRole("button", { name: "Markdown", exact: true }).click();
+  const source = page.getByRole("textbox", { name: "Description, as Markdown" });
+  await source.fill("Written as **Markdown**.");
+  await source.press("Control+Enter");
+  await expect(save).toHaveCount(0);
+  await expect(page.getByRole("strong").filter({ hasText: "Markdown" })).toBeVisible();
+
+  // From the title, too.
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Title").fill("Shortcut taken");
+  await page.getByLabel("Title").press("Control+Enter");
+  await expect(save).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "CRONK-1 Shortcut taken" })).toBeVisible();
+  expect(patches).toBe(3);
+});

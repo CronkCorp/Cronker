@@ -31,7 +31,7 @@ import {
 } from "./api.js";
 import { attachAll, Attachments, FileList } from "./attachments.js";
 import { costsText, costText } from "./costs.js";
-import { field, useSubmit } from "./forms.js";
+import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { shortcutStandsAside } from "./keys.js";
 import { useArrivals } from "./live.js";
@@ -435,9 +435,21 @@ function TextFields({ ticket, onSave, onDone }: { ticket: Ticket; onSave: (edit:
   return (
     <form onSubmit={onSubmit} className="panel">
       <Field label="Title">
-        <input value={title} required maxLength={300} onChange={(e) => setTitle(e.target.value)} />
+        <input
+          value={title}
+          required
+          maxLength={300}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => submitOnCtrlOrCmdEnter(e.nativeEvent, e.currentTarget)}
+        />
       </Field>
-      <RichEditor label="Description" hint="Ticket keys link to their Tickets." value={description} onChange={setDescription} />
+      <RichEditor
+        label="Description"
+        hint="Ticket keys link to their Tickets."
+        value={description}
+        onChange={setDescription}
+        submitOnCtrlOrCmdEnter
+      />
       <Actions>
         <Button type="submit" variant="primary" disabled={busy || (title === ticket.title && description === ticket.description)}>
           Save
