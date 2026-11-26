@@ -31,7 +31,10 @@ export async function changeStep(
       await requireStepAuthor(tx, caller, project);
       if (!mayHaveStep(status.kind)) throw stepOnDoneOrCanceled(status);
       checkOutcomes(change.step.outcomes, status, project.statuses);
+      // The Step may name another Runner: its waiting Tickets move to that Runner's queue, freeing places in the old one.
+      const before = await waitingTickets(tx, "tickets.status_id = $1", [statusId]);
       await writeStep(tx, project, statusId, change.step, clock.now());
+      recheckWaiting(context, tx, [...before, ...(await waitingTickets(tx, "tickets.status_id = $1", [statusId]))]);
     } else {
       await removeStep(tx, statusId);
       // Tickets there waiting for a Run need none now.

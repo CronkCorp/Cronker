@@ -211,6 +211,7 @@ export async function createProject(
         roundLimit: defaultRoundLimit,
         labelRule: labelRule ?? null,
         readOnly: readOnly ?? false,
+        runner: null,
         outcomes: outcomes.map(({ name, status, ...flags }) => ({
           name,
           statusId: idOf(status),

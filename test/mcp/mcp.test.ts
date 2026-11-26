@@ -998,7 +998,7 @@ describe("MCP with an Agent token", () => {
     // set_step is the documented exception: its Outcomes name their Status, where the route takes `statusId`.
     const step = input("set_step");
     expect(Object.keys(step.properties).sort()).toEqual(
-      ["brief", "kind", "labelRule", "model", "outcomes", "project", "readOnly", "roundLimit", "status"],
+      ["brief", "kind", "labelRule", "model", "outcomes", "project", "readOnly", "roundLimit", "runner", "status"],
     );
     expect(step.properties.brief).toEqual(expect.objectContaining({ maxLength: 50_000, pattern: "\\S" }));
     expect(step.properties.model).toEqual(expect.objectContaining({ maxLength: 50, pattern: "^\\S+$" }));
@@ -1517,6 +1517,7 @@ describe("MCP with an Agent token", () => {
       roundLimit: 2,
       labelRule: null,
       readOnly: false,
+      runner: null,
       outcomes: [
         { name: "sketched", statusId: ids.get("Ready"), default: true, needsYou: false, countsAsRound: false },
         { name: "needs you", statusId: ids.get("Backlog"), default: false, needsYou: true, countsAsRound: false },

@@ -1,7 +1,7 @@
 import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { runReports, startWaitingRuns } from "./runs.js";
-import { mappedModelOf } from "./waiting.js";
+import { mappedModelOf, ticketRunner } from "./waiting.js";
 
 /**
  * What a Run of a `local` Runner needs (CRONK-156): a label its Runner maps to a Machine model needs that Machine
@@ -133,8 +133,8 @@ export async function ticketCardsChanged(context: Context, runnerIds: string[]):
   await transaction(context.db, async (tx) => {
     const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string }>(
       `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"
-       from tickets join agents on agents.id = tickets.delegate_id
-       where tickets.waits_for_run and agents.runner_id = any($1::uuid[])`,
+       from tickets
+       where tickets.waits_for_run and ${ticketRunner("tickets")} = any($1::uuid[])`,
       [runnerIds],
     );
     for (const ticket of rows) {

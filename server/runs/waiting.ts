@@ -49,6 +49,20 @@ export const isBlocked = (alias: string) =>
     or exists (select 1 from tickets subs join statuses on statuses.id = subs.status_id
       where subs.parent_id = ${alias}.id and statuses.kind not in ${finishedKinds}))`;
 
+/**
+ * SQL for the id of the Runner the Ticket `alias`'s next Run starts on: the Runner its Step names, among those of its
+ * Delegate's Owner, matched ignoring case; or, for a Step naming none, its Delegate's own Runner. Null for an
+ * undelegated Ticket, a Delegate using no Runner, and a Step naming a Runner its Delegate's Owner hasn't, whose Run
+ * is refused rather than started on another Runner.
+ */
+export const ticketRunner = (alias: string) =>
+  `(select case when step_of.runner_name is null then delegate_of.runner_id
+       else (select named.id from runners named
+         where named.owner_id = delegate_of.owner_id and lower(named.name) = lower(step_of.runner_name)
+         order by named.created_at, named.id limit 1) end
+     from agents delegate_of left join steps step_of on step_of.status_id = ${alias}.status_id
+     where delegate_of.id = ${alias}.delegate_id)`;
+
 /** SQL that holds while the Ticket `alias` is in an archived Project. */
 export const inArchivedProject = (alias: string) =>
   `exists (select 1 from projects archived where archived.id = ${alias}.project_id and archived.archived_at is not null)`;
@@ -96,13 +110,13 @@ export const machineModelWaits = (runners: string, model: string) =>
              and offered->>'name' = ${model} and (offered->>'up')::boolean), 0))`;
 
 /**
- * SQL for the Machine model the Ticket `alias` would wait for now through its Delegate's Runner: the one its Step's
+ * SQL for the Machine model the Ticket `alias` would wait for now through its Runner: the one its Step's
  * label is mapped to, while it has no room. Null otherwise, and for a Runner that isn't `local`.
  */
 const modelWaitedFor = (alias: string) =>
-  `(select waited.model from agents join runners on runners.id = agents.runner_id
+  `(select waited.model from runners
      cross join lateral (select ${mappedModelOf("runners", stepLabel(alias))} as model) waited
-     where agents.id = ${alias}.delegate_id and runners.kind = 'local' and waited.model is not null
+     where runners.id = ${ticketRunner(alias)} and runners.kind = 'local' and waited.model is not null
        and ${machineModelWaits("runners", "waited.model")})`;
 
 /**
@@ -118,19 +132,19 @@ export const claudeWaits = (runners: string, label: string) =>
       where claude_on.runner_id = ${runners}.id and claude.revoked_at is null and claude.announces_claude
         and claude.connections > 0))`;
 
-/** SQL that holds while the Ticket `alias` would wait for Claude now through its Delegate's `local` Runner. */
+/** SQL that holds while the Ticket `alias` would wait for Claude now through its `local` Runner. */
 const claudeWaitedFor = (alias: string) =>
-  `exists (select 1 from agents join runners on runners.id = agents.runner_id
-     where agents.id = ${alias}.delegate_id and runners.kind = 'local' and ${claudeWaits("runners", stepLabel(alias))})`;
+  `exists (select 1 from runners
+     where runners.id = ${ticketRunner(alias)} and runners.kind = 'local' and ${claudeWaits("runners", stepLabel(alias))})`;
 
 /** SQL for what the Ticket `alias` waits for, as `Waiting`. */
 export const waitingColumn = (alias: string) =>
   `case when not ${alias}.waits_for_run then null when ${inArchivedProject(alias)} then 'archived'
      when ${isBlocked(alias)} then 'blocked'
-     when exists (select 1 from agents join runners on runners.id = agents.runner_id
-       where agents.id = ${alias}.delegate_id and ${runnerOffline("runners")}) then 'runnerOffline'
-     when exists (select 1 from agents join runners on runners.id = agents.runner_id
-       where agents.id = ${alias}.delegate_id and runners.paused_until is not null) then 'runnerPaused'
+     when exists (select 1 from runners
+       where runners.id = ${ticketRunner(alias)} and ${runnerOffline("runners")}) then 'runnerOffline'
+     when exists (select 1 from runners
+       where runners.id = ${ticketRunner(alias)} and runners.paused_until is not null) then 'runnerPaused'
      when ${modelWaitedFor(alias)} is not null then 'machineModel'
      when ${claudeWaitedFor(alias)} then 'claude'
      else 'runnerSlot' end`;

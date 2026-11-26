@@ -20,14 +20,14 @@ import { Cost } from "./costs.js";
 import { isLocalOnly, type RunReports, type RunToStart, type StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
-import { inArchivedProject, isBlocked, queueOrder, runnerOffline, waitsForMachine } from "./waiting.js";
+import { inArchivedProject, isBlocked, queueOrder, runnerOffline, ticketRunner, waitsForMachine } from "./waiting.js";
 import { userName } from "../identity/user.js";
 import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
 import { backported, backportingOutcome, backportOf, queueBackports, type Backport } from "../pipeline/backports.js";
 import { sessionIdOf } from "./session-ids.js";
 
 /**
- * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
+ * Runs: when a Ticket gets one, starting it through its Runner (its Step's, or else its Delegate's), and ending it.
  * A delegated Ticket entering a Status with a Step gets a Run, unless it has a running one;
  * the Run ends when its Agent calls `finish` with an Outcome, when its Runner reports it ended
  * without finishing, when nothing names it for its Workspace's lost-Run threshold, or when a User
@@ -223,7 +223,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
        projects.archived_at is not null as archived
      from tickets join projects on projects.id = tickets.project_id
      left join agents on agents.id = tickets.delegate_id
-     left join runners on runners.id = agents.runner_id
+     left join runners on runners.id = ${ticketRunner("tickets")}
      where tickets.id = $1`,
     [ticketId],
   );
@@ -311,11 +311,13 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   if (ticket.runnerId && !(await lockRunnerIfAny(tx, ticket.runnerId))) return enterStatus(context, tx, ticketId, now, skipped);
   const runner = ticket.runnerKind ? context.runners[ticket.runnerKind] : undefined;
   const refusal = !ticket.runnerId
-    ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
+    ? status.step.runner
+      ? stepRunnerRefusal(status.name, status.step.runner, ticket.agentName!)
+      : `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
     : !runner
       ? `This Cronk can't start Runs through ${ticket.runnerName}, a Runner of the kind ${ticket.runnerKind}.`
       : runner.cloud && isLocalOnly(ticket.labels)
-        ? localOnlyRefusal(ticket.key, ticket.agentName!, ticket.runnerName!)
+        ? localOnlyRefusal(ticket.key, status.step.runner ? status.name : ticket.agentName!, ticket.runnerName!)
         : null;
   // A Run that will be refused takes no slot, so it doesn't wait for one.
   if (ticket.blocked || (runner && !refusal && !(await hasSlotFor(tx, ticket.runnerId!, ticketId)))) {
@@ -427,11 +429,22 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   return "started";
 }
 
-/** Why a `local-only` Ticket gets no Run through its Delegate's cloud Runner. */
-function localOnlyRefusal(key: string, agentName: string, runnerName: string): string {
+/**
+ * Why a `local-only` Ticket gets no Run through a cloud Runner: the one its Delegate uses, or the one its Step names,
+ * `user` naming the Agent or the Step.
+ */
+function localOnlyRefusal(key: string, user: string, runnerName: string): string {
   return (
-    `${key} is labelled local-only: it can't run in a cloud session, and ${agentName} uses ${runnerName}, a cloud Runner. ` +
-    "Delegate it to an Agent whose Runner isn't in the cloud, or remove the label."
+    `${key} is labelled local-only: it can't run in a cloud session, and ${user} uses ${runnerName}, a cloud Runner. ` +
+    "Delegate it to an Agent whose Runner isn't in the cloud, have the Step name one that isn't, or remove the label."
+  );
+}
+
+/** Why a Ticket gets no Run when its Step names a Runner its Delegate's Owner hasn't: it never runs on another one. */
+function stepRunnerRefusal(stepName: string, runnerName: string, agentName: string): string {
+  return (
+    `${stepName} starts its Runs on the Runner ${runnerName}, and ${agentName}'s Owner has no Runner of that name. ` +
+    `Its Owner adds or renames one of their Runners to ${runnerName}, or the Step names another Runner or none.`
   );
 }
 
@@ -500,8 +513,8 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
   if (offline[0]?.offline || offline[0]?.modelWaits) return false;
   const { rows } = await tx.query<{ taken: number }>(
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
-       + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
-          where agents.runner_id = $1 and waiting.waits_for_run and waiting.id <> $2 and not ${isBlocked("waiting")}
+       + (select count(*) from tickets waiting
+          where ${ticketRunner("waiting")} = $1 and waiting.waits_for_run and waiting.id <> $2 and not ${isBlocked("waiting")}
             and not ${inArchivedProject("waiting")} and not ${waitsForMachine("waiting")}
             and (${queueOrder("waiting")}) < (select ${queueOrder("tickets")} from tickets where id = $2)) as taken`,
     [runnerId, ticketId],
@@ -519,8 +532,8 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
 export async function blockingChanged(context: Context, tx: Tx, moved: string[], also: string[] = []): Promise<void> {
   const { rows } = await tx.query<WaitingTicket & { workspaceId: string; projectId: string; waits: boolean }>(
     `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
-       agents.runner_id as "runnerId", tickets.waits_for_run as waits
-     from tickets left join agents on agents.id = tickets.delegate_id
+       ${ticketRunner("tickets")} as "runnerId", tickets.waits_for_run as waits
+     from tickets
      where tickets.id in (select other_ticket_id from relations where kind = 'blocks' and ticket_id = any($1::uuid[]))
        or (tickets.waits_for_run and (tickets.id = any($2::uuid[])
          or tickets.id in (select parent_id from tickets where id = any($1::uuid[]))))`,
@@ -532,7 +545,7 @@ export async function blockingChanged(context: Context, tx: Tx, moved: string[],
   recheckWaiting(context, tx, rows.filter((row) => row.waits));
 }
 
-/** A waiting Ticket, with the Runner its Delegate uses, if any. */
+/** A waiting Ticket, with the Runner its next Run would start on, if any. */
 export interface WaitingTicket {
   id: string;
   runnerId: string | null;
@@ -541,7 +554,7 @@ export interface WaitingTicket {
 /** The Tickets waiting for a Run that match the SQL condition on `tickets`, with their Runners. */
 export async function waitingTickets(tx: Tx, where: string, params: unknown[]): Promise<WaitingTicket[]> {
   const { rows } = await tx.query<WaitingTicket>(
-    `select tickets.id, agents.runner_id as "runnerId"
+    `select tickets.id, ${ticketRunner("tickets")} as "runnerId"
      from tickets left join agents on agents.id = tickets.delegate_id
      where tickets.waits_for_run and ${where}
      order by ${queueOrder("tickets")}`,
@@ -558,7 +571,7 @@ export async function waitingTickets(tx: Tx, where: string, params: unknown[]): 
 export function recheckWaiting(context: Context, tx: Tx, tickets: WaitingTicket[]): void {
   if (tickets.length === 0) return;
   afterCommit(tx, async () => {
-    for (const { id } of tickets) await recheck(context, id);
+    for (const id of new Set(tickets.map((t) => t.id))) await recheck(context, id);
     for (const runnerId of new Set(tickets.flatMap((t) => t.runnerId ?? []))) await startWaitingRuns(context, runnerId);
   });
 }
@@ -580,8 +593,8 @@ async function recheck(context: Context, ticketId: string): Promise<RunNeed> {
 export async function startWaitingRuns(context: Context, runnerId: string): Promise<void> {
   for (;;) {
     const { rows } = await context.db.query<{ id: string }>(
-      `select tickets.id from tickets join agents on agents.id = tickets.delegate_id
-       where agents.runner_id = $1 and tickets.waits_for_run and not ${isBlocked("tickets")}
+      `select tickets.id from tickets
+       where ${ticketRunner("tickets")} = $1 and tickets.waits_for_run and not ${isBlocked("tickets")}
          and not ${inArchivedProject("tickets")} and not ${waitsForMachine("tickets")}
        order by ${queueOrder("tickets")} limit 1`,
       [runnerId],

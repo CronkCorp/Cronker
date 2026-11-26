@@ -39,6 +39,12 @@ export const StepKind = Type.Union([Type.Literal("ordinary"), Type.Literal("merg
 });
 export type StepKind = Static<typeof StepKind>;
 
+/** What a Step's Runner is, for the schemas. */
+const stepRunnerWhy =
+  "The name of the Runner the Step's Runs start on, matched ignoring case among the Runners of the Ticket's Delegate's " +
+  "Owner, instead of the Delegate's own Runner; null for the Delegate's own. A Ticket waits for that Runner's slots " +
+  "as for any Runner's, and gets a refused Run when its Delegate's Owner has no Runner of that name.";
+
 /** How many Outcomes a Step has. */
 export const outcomeCount = { minItems: 2, maxItems: 20 };
 
@@ -81,13 +87,19 @@ export const StepPut = Type.Object({
         " Off unless given.",
     }),
   ),
+  runner: Type.Optional(
+    Type.Union([Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" }), Type.Null()], {
+      default: null,
+      description: stepRunnerWhy + " None unless given.",
+    }),
+  ),
   outcomes: Type.Array(Outcome, outcomeCount),
 });
 export type StepPut = Static<typeof StepPut>;
 
 /**
  * The agent work a Status asks for: its kind, a Brief, the model it wants, a round limit, a Label rule, whether it is
- * read-only and its Outcomes.
+ * read-only, the Runner it names, if any, and its Outcomes.
  */
 export const Step = Type.Object({
   kind: StepKind,
@@ -100,6 +112,7 @@ export const Step = Type.Object({
       "Whether the Step's Runs on machine Runners may not change files: their file edits are refused and their " +
         "Brief says so. Commands that write, such as \`sed -i\`, aren't stopped.",
   }),
+  runner: Type.Union([Type.String(), Type.Null()], { description: stepRunnerWhy }),
   outcomes: Type.Array(Outcome),
 });
 export type Step = Static<typeof Step>;
@@ -108,7 +121,7 @@ export type Step = Static<typeof Step>;
 export async function stepsOf(db: Db | Tx, projectId: string): Promise<Map<string, Step>> {
   const { rows } = await db.query<Omit<Step, "outcomes"> & { statusId: string; outcomes: Outcome[] }>(
     `select steps.status_id as "statusId", steps.kind, steps.brief, steps.model, steps.round_limit as "roundLimit",
-       steps.read_only as "readOnly",
+       steps.read_only as "readOnly", steps.runner_name as runner,
        case when steps.label_rule_kind is null then null else json_build_object(
          'kind', case steps.label_rule_kind when 'skipped_by' then 'skippedBy' else steps.label_rule_kind end,
          'label', steps.label_rule_label
@@ -228,11 +241,11 @@ export async function writeStep(
 ): Promise<void> {
   const { rows } = await tx.query<{ id: string }>(
     `insert into steps (workspace_id, project_id, status_id, brief, model, round_limit, label_rule_kind, label_rule_label,
-       created_at, kind, read_only)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       created_at, kind, read_only, runner_name)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      on conflict (status_id) do update set brief = excluded.brief, model = excluded.model, round_limit = excluded.round_limit,
        label_rule_kind = excluded.label_rule_kind, label_rule_label = excluded.label_rule_label, kind = excluded.kind,
-       read_only = excluded.read_only
+       read_only = excluded.read_only, runner_name = excluded.runner_name
      returning id`,
     [
       project.workspaceId,
@@ -246,6 +259,7 @@ export async function writeStep(
       now,
       step.kind,
       step.readOnly,
+      step.runner?.trim() || null,
     ],
   );
   const stepId = rows[0]!.id;

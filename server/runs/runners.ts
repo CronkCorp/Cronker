@@ -12,7 +12,7 @@ import { defaultAllowedTools, notForMachineModels } from "./allowlist.js";
 import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
-import { runnerOffline } from "./waiting.js";
+import { runnerOffline, ticketRunner } from "./waiting.js";
 import { machineModelNamePattern, machineModelsChanged, type MachineModelMapping } from "./machine-models.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
@@ -389,10 +389,10 @@ interface PastedTrigger {
  */
 async function recheckCouldntStart(context: Context, tx: Tx, trigger: PastedTrigger): Promise<void> {
   const { rows } = await tx.query<WaitingTicket>(
-    `select tickets.id, agents.runner_id as "runnerId"
-     from tickets join agents on agents.id = tickets.delegate_id
+    `select tickets.id, ${ticketRunner("tickets")} as "runnerId"
+     from tickets
      join lateral (select state, status_id, model from runs where runs.ticket_id = tickets.id order by seq desc limit 1) latest on true
-     where agents.runner_id = $1 and latest.state = 'refused' and latest.status_id = tickets.status_id
+     where ${ticketRunner("tickets")} = $1 and latest.state = 'refused' and latest.status_id = tickets.status_id
        and lower(latest.model) = lower($2)
        and (tickets.project_id = $3 or ($3::uuid is null and not exists (
          select 1 from runner_triggers own where own.runner_id = $1 and own.project_id = tickets.project_id
@@ -488,8 +488,9 @@ export async function removeRunner(context: Context, userId: string, runnerId: s
         `${name} has ${running === 1 ? "a Run" : `${running} Runs`} running. Wait for its running Runs to end, or stop them first.`,
       );
     }
-    // Its Agents' Tickets waiting in its queue are rechecked once it is gone, as for an Agent with no Runner.
-    const waiting = await waitingTickets(tx, "agents.runner_id = $1", [runnerId]);
+    // The Tickets waiting in its queue, its Agents' and those whose Step names it, are rechecked once it is gone, as for
+    // an Agent with no Runner: a Step naming it then gets refused Runs, never Runs on another Runner.
+    const waiting = await waitingTickets(tx, `${ticketRunner("tickets")} = $1`, [runnerId]);
     await tx.query("update agents set runner_id = null where runner_id = $1", [runnerId]);
     // Past Runs keep their history, without the Runner.
     await tx.query("update runs set runner_id = null where runner_id = $1", [runnerId]);
