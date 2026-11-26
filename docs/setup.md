@@ -213,6 +213,8 @@ A local Runner runs your Agents' Runs with Claude Code on a Machine of your own,
 
 `install`, `run` and `status` first check that `claude` and `git` are on the `PATH` and that Claude Code is signed in (`claude auth login`), and name whatever is missing; `install` installs nothing until they are. A Machine with Machine models (step 12) needs Claude Code only for Runs on Claude: without it, it runs only its Machine models' Runs. The service keeps the `PATH` and the Node that `install` ran with, so run `cronk-runner install` again from your usual shell after installing new tools or another Node. `cronk-runner uninstall` stops the service and removes it. To run the daemon in a terminal instead, use `cronk-runner run`.
 
+A local Runner's Runs read and write only in their worktree unless its card lists **Allowed directories**: absolute paths, one per line, such as `/tmp`, which Claude Code gets as `--add-dir` and OpenCode as allowed external directories. Any directory not listed stays denied to their file tools (the allowlist's `Bash` rules aren't scoped to paths). All of the Runner's Runs share the directories listed, and `/` itself is refused. A daemon older than this setting opens none, so upgrade it.
+
 A Run of a read-only Step, such as Triage or Investigate on the default board, runs with Claude Code's edit tools refused: it can still run the commands its Runner's allowlist allows, some of which write files, such as `sed -i`. Turn a Step's **read-only** setting on or off under the Project's **Steps**. A daemon older than this setting edits anyway, so upgrade it.
 
 To upgrade it, run `npm install -g cronk-runner@latest`, then `cronk-runner install` again.
@@ -242,7 +244,7 @@ How these Runs behave:
 
 - **No fallback to Claude.** A mapped label's Runs run only on its Machine model. While it is down or full, or its Machine offline, the Ticket waits (*Machine model down or full*); once no Machine serving the Runner has it set up, the Run is refused, naming the label to map again.
 - **Machines without one program.** A Machine without OpenCode, or with V1, keeps running Claude's Runs and offers none of its Machine models; `cronk-runner status` says so. A Machine without Claude Code runs only its Machine models' Runs, and the Runners page shows it as *Doesn't run Claude*.
-- **The allowlist** governs these Runs too, translated for OpenCode with everything unlisted denied. They may read, search and edit in their worktree and get only its `Bash`, `WebFetch` and `WebSearch` rules; a rule that can't be translated is left out, never widened, and listed on the Runner's card as *Not applying to Machine models*. A Run that needed a denied tool says so when it ends: widen the allowlist and Retry.
+- **The allowlist** governs these Runs too, translated for OpenCode with everything unlisted denied. They may read, search and edit in their worktree and the Runner's allowed directories, and get only its `Bash`, `WebFetch` and `WebSearch` rules; a rule that can't be translated is left out, never widened, and listed on the Runner's card as *Not applying to Machine models*. A Run that needed a denied tool says so when it ends: widen the allowlist and Retry.
 - **Ending.** A Run that stops without calling `finish` is resumed once with a reminder, then fails. The time limit counts from its first start, the resume included. A server that only gets retried for 5 minutes fails the Run. Cronk records no cost for these Runs.
 
 What to know before you rely on it:

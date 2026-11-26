@@ -7,6 +7,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -499,6 +500,42 @@ describe("cronk-runner run", () => {
       "Bash(cargo test:*)",
       "mcp__cronk",
     ]);
+  });
+
+  test("a Runner's allowed directory is added to claude, so a Run writes under it, and one not listed stays denied", async () => {
+    const { ada, runner, start, delegate, triageReadOnly, runs, runState } = await localSetUp();
+    await triageReadOnly(false);
+    const allowed = await realpath(await mkdtemp(join(tmpdir(), "cronk-allowed-")));
+    const other = await realpath(await mkdtemp(join(tmpdir(), "cronk-other-")));
+    try {
+      await ok("PATCH", `/api/runners/${runner.id}`, ada, { allowedDirectories: [allowed] });
+      start(`write:${join(allowed, "out.txt")},write:${join(other, "out.txt")}`);
+
+      const { run: writes } = await delegate("Write to the allowed directory");
+      await eventually(async () => (await runState(writes.id)).state === "finished");
+      expect(await readFile(join(allowed, "out.txt"), "utf8")).toBe("written by the stand-in claude\n");
+      const [ran] = await runs();
+      // Before the allowlist, which takes every argument after it; the real path is already the path.
+      expect(ran.args.slice(ran.args.indexOf("--permission-mode"))).toEqual([
+        "--permission-mode",
+        "acceptEdits",
+        "--add-dir",
+        allowed,
+        "--allowedTools",
+        ...defaultAllowedTools,
+      ]);
+
+      const { run: denied } = await delegate("Write elsewhere");
+      const failed = await eventually(async () => {
+        const state = await runState(denied.id);
+        return state.state === "failed" && state;
+      });
+      expect(failed.endReason).toContain("Write");
+      await expect(access(join(other, "out.txt"))).rejects.toThrow();
+    } finally {
+      await rm(allowed, { recursive: true, force: true });
+      await rm(other, { recursive: true, force: true });
+    }
   });
 
   test("a Run of a read-only Step runs claude accepting no edits, the edit tools disallowed and out of the allowlist", async () => {

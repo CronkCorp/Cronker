@@ -106,6 +106,12 @@ export const RunnerRecord = Type.Object({
       "own MCP tools (`mcp__cronk`) are always allowed. Runs on Machine models get it translated for OpenCode " +
       "(`notForMachineModels`). Null for other kinds.",
   }),
+  allowedDirectories: Type.Union([Type.Array(Type.String()), Type.Null()], {
+    description:
+      "For a `local` Runner, the absolute paths of the directories outside their worktrees its Runs may read and " +
+      "write, such as `/tmp`, passed to `claude` as `--add-dir` and allowed to Runs on Machine models alike; shared " +
+      "by all its Runs. Empty by default: no other directory is opened. Null for other kinds.",
+  }),
   notForMachineModels: Type.Union([Type.Array(Type.String()), Type.Null()], {
     description:
       "For a `local` Runner, the rules of its allowlist that don't apply to Runs on Machine models, as written: only " +
@@ -154,6 +160,7 @@ const columns = (now: string) => `id, name, kind, run_limit as limit,
   case when budget_per_run is not null then json_build_object('amount', budget_per_run, 'currency', 'USD') end
     as "budgetPerRun",
   allowed_tools as "allowedTools",
+  allowed_directories as "allowedDirectories",
   case when kind = 'local' then machine_models end as "machineModels",
   ${costTotalsSql(`runs.runner_id = runners.id and runs.ended_at >= date_trunc('month', ${now}::timestamptz, 'UTC')`)}
     as "costThisMonth",
@@ -220,8 +227,9 @@ export async function createRunner(
     managed = await setUpManagedAgents(context, { name: input.name, apiKey: input.apiKey });
   }
   const { rows } = await db.query<Row>(
-    `insert into runners (owner_id, kind, name, created_at, api_key_sealed, managed_agent_id, managed_environment_id, allowed_tools)
-     values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
+    `insert into runners (owner_id, kind, name, created_at, api_key_sealed, managed_agent_id, managed_environment_id, allowed_tools,
+       allowed_directories)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
     [
       userId,
       input.kind,
@@ -231,6 +239,7 @@ export async function createRunner(
       managed?.agentId ?? null,
       managed?.environmentId ?? null,
       input.kind === "local" ? [...defaultAllowedTools] : null,
+      input.kind === "local" ? [] : null,
     ],
   );
   return (await findRunner(context, userId, rows[0]!.id))!;
@@ -518,6 +527,35 @@ export const AllowedTools = Type.Union(
   },
 );
 
+export const AllowedDirectories = Type.Array(Type.String({ minLength: 1, maxLength: 500, pattern: "\\S" }), {
+  maxItems: 50,
+  description:
+    "For a `local` Runner, the directories outside their worktrees its Runs may read and write, such as `/tmp`, " +
+    "replacing those it lists: each an absolute path without `.` or `..` parts, and not `/` itself; trimmed, with a " +
+    "trailing `/` and repeats dropped. An empty list opens none. It applies to Runs claimed from then on.",
+});
+
+/**
+ * Directories as saved: trimmed, without a trailing `/`, each once. Refused with `invalid_directory` for one that
+ * isn't absolute, has a `.` or `..` part, or is `/` itself, which would open the whole Machine.
+ */
+export function checkedDirectories(input: readonly string[]): string[] {
+  const directories = input.map((written) => {
+    const directory = written.trim().replace(/\/+$/, "");
+    if (!written.trim().startsWith("/")) {
+      throw new ApiError(400, "invalid_directory", `${written.trim()} isn't an absolute path: give one starting with /, such as /tmp.`);
+    }
+    if (!directory) {
+      throw new ApiError(400, "invalid_directory", "/ would open the whole Machine to the Runner's Runs: list the directories they need.");
+    }
+    if (directory.split("/").some((part) => part === "." || part === "..")) {
+      throw new ApiError(400, "invalid_directory", `${written.trim()} has a . or .. part: give the directory's path without them.`);
+    }
+    return directory.replace(/\/{2,}/g, "/");
+  });
+  return [...new Set(directories)];
+}
+
 /** A `local` Runner's mapping of model labels to Machine models, as the API takes it. */
 export const MachineModels = Type.Array(
   Type.Object(
@@ -539,12 +577,13 @@ export const MachineModels = Type.Array(
   },
 );
 
-/** The change-a-Runner route's body: whichever of its limit, budget per Run, allowlist and Machine models are given, at least one. */
+/** The change-a-Runner route's body: whichever of its limit, budget per Run, allowlist, allowed directories and Machine models are given, at least one. */
 export const RunnerEdit = Type.Object(
   {
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     budgetPerRun: Type.Optional(BudgetPerRun),
     allowedTools: Type.Optional(AllowedTools),
+    allowedDirectories: Type.Optional(AllowedDirectories),
     machineModels: Type.Optional(MachineModels),
   },
   { minProperties: 1 },
@@ -554,7 +593,7 @@ export type RunnerEdit = Static<typeof RunnerEdit>;
 /**
  * Changes one of the User's own Runners: how many Runs it keeps running at once, where a higher limit starts waiting
  * Tickets, for a `managed_agents` Runner its budget per Run, which Runs started from then on get, and for a `local`
- * Runner its allowlist and its mapping of labels to Machine models, which Runs claimed from then on get. Only the
+ * Runner its allowlist, its allowed directories and its mapping of labels to Machine models, which Runs claimed from then on get. Only the
  * Runner's Owner changes it: another User's Runner answers as not found.
  */
 export async function updateRunner(
@@ -586,6 +625,13 @@ export async function updateRunner(
         `${runner.name} is a Runner of the kind ${runner.kind}, whose Runs don't run on your Machines: only a local Runner has an allowlist.`,
       );
     }
+    if (input.allowedDirectories !== undefined && runner.kind !== "local") {
+      throw new ApiError(
+        409,
+        "runner_has_no_directories",
+        `${runner.name} is a Runner of the kind ${runner.kind}, whose Runs don't run on your Machines: only a local Runner opens directories.`,
+      );
+    }
     if (input.machineModels !== undefined && runner.kind !== "local") {
       throw new ApiError(
         409,
@@ -596,11 +642,13 @@ export async function updateRunner(
     const machineModels = input.machineModels && (await checkedMachineModels(tx, runnerId, input.machineModels));
     const allowedTools =
       input.allowedTools === null ? [...defaultAllowedTools] : input.allowedTools && [...new Set(input.allowedTools.map((rule) => rule.trim()))];
+    const allowedDirectories = input.allowedDirectories && checkedDirectories(input.allowedDirectories);
     const { rows } = await tx.query<Row>(
       `update runners set run_limit = coalesce($3, run_limit),
          budget_per_run = case when $4::boolean then $5::integer else budget_per_run end,
          allowed_tools = coalesce($7::text[], allowed_tools),
-         machine_models = coalesce($8::jsonb, machine_models)
+         machine_models = coalesce($8::jsonb, machine_models),
+         allowed_directories = coalesce($9::text[], allowed_directories)
        where id = $1 and owner_id = $2 returning ${columns("$6")}`,
       [
         runnerId,
@@ -611,6 +659,7 @@ export async function updateRunner(
         context.clock.now(),
         allowedTools ?? null,
         machineModels ? JSON.stringify(machineModels) : null,
+        allowedDirectories ?? null,
       ],
     );
     if (input.limit !== undefined) afterCommit(tx, () => startWaitingRuns(context, runnerId));

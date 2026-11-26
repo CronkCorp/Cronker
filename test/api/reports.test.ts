@@ -97,6 +97,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0090_machine_model_mappings.sql");
     // Creating a Project writes its Steps' read-only setting.
     await cronk.applyAhead("0091_read_only_steps.sql");
+    // Adding a Runner writes its Allowed directories.
+    await cronk.applyAhead("0092_runner_allowed_directories.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

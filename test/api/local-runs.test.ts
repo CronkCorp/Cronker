@@ -205,6 +205,7 @@ describe("claiming a local Run", () => {
       mcpUrl: `${cronk.url}/mcp`,
       repositories: [],
       allowedTools: [...defaultAllowedTools],
+      allowedDirectories: [],
       // Triage is read-only on the default board.
       readOnly: true,
     });
@@ -1435,6 +1436,51 @@ async function uploadTranscript(token: string, runId: string, body: string) {
   );
   return { status: response.status, json: await response.json() };
 }
+
+describe("a local Runner's allowed directories", () => {
+  test("none by default; its User lists them, trimmed and without repeats, and they apply to Runs claimed from then on", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp({ runLimit: 2, machineLimit: 2 });
+    expect(runner.allowedDirectories).toEqual([]);
+    const { run: before } = await delegate("Before");
+    const beforeClaim = await claim(machineToken, before.id);
+
+    const { run: after } = await delegate("After");
+    const edited = await ok("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: { allowedDirectories: [" /tmp ", "/tmp/", "/var//cache/builds", "/tmp"] },
+    });
+    expect(edited.allowedDirectories).toEqual(["/tmp", "/var/cache/builds"]);
+    // The allowlist is kept as it was.
+    expect(edited.allowedTools).toEqual([...defaultAllowedTools]);
+    expect((await ok("GET", "/api/runners", { cookie: ada }))[0].allowedDirectories).toEqual(["/tmp", "/var/cache/builds"]);
+    expect(beforeClaim.json.allowedDirectories).toEqual([]);
+    expect((await claim(machineToken, after.id)).json.allowedDirectories).toEqual(["/tmp", "/var/cache/builds"]);
+
+    const cleared = await ok("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { allowedDirectories: [] } });
+    expect(cleared.allowedDirectories).toEqual([]);
+  });
+
+  test("a relative path, one with . or .. parts, / itself and too many are refused, and a Runner of another kind has none", async () => {
+    const { ada, runner } = await localSetUp();
+    for (const allowedDirectories of [["tmp"], ["~/scratch"], ["/tmp/../etc"], ["/tmp/./x"], ["/"], ["//"], [" "]]) {
+      const refused = await call("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { allowedDirectories } });
+      expect(refused.status, JSON.stringify(allowedDirectories)).toBe(400);
+      if (allowedDirectories[0] !== " ") expect(refused.json.error.code).toBe("invalid_directory");
+    }
+    const many = await call("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: { allowedDirectories: Array.from({ length: 51 }, (_, i) => `/tmp/${i}`) },
+    });
+    expect(many.status).toBe(400);
+    expect((await ok("GET", "/api/runners", { cookie: ada }))[0].allowedDirectories).toEqual([]);
+
+    const cloud = await ok("POST", "/api/runners", { cookie: ada, body: { name: "Max", kind: "subscription" } });
+    expect(cloud.allowedDirectories).toBeNull();
+    const refused = await call("PATCH", `/api/runners/${cloud.id}`, { cookie: ada, body: { allowedDirectories: ["/tmp"] } });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("runner_has_no_directories");
+  });
+});
 
 describe("a local Run's transcript", () => {
   test("uploaded by its Machine becomes the Run's Transcript, replaced by each later upload, even after the Run ended", async () => {

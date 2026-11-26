@@ -4,7 +4,9 @@
 // its `--mcp-config` and exits 0; `wait-finish` does so once the file `$STAND_IN_CLAUDE_LOG.go` exists; `exit:<code>`
 // exits with that code without finishing; `denied:<command>` ends its turn on a Bash call to that command outside its
 // allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; `edit-denied:<path>` does the
-// same for an Edit of that file; `hang`s until killed; or
+// same for an Edit of that file; `write:<path>` writes that file as Claude Code's Write tool would, allowed only inside
+// its working directory or a directory its `--add-dir`s name, then finishes, and otherwise ends its turn on the Write
+// denied, as `edit-denied` does; `hang`s until killed; or
 // `hang-hard`s, ignoring SIGTERM, until SIGKILL. A comma-separated $STAND_IN_CLAUDE_MODE gives each run its own mode, in
 // the order they run, the last one for any further runs. $STAND_IN_CLAUDE_OUTCOME is the Outcome it finishes with
 // (`ready` when unset), and with $STAND_IN_CLAUDE_LINGER_MS set it waits that long after finishing before it exits, as
@@ -73,6 +75,12 @@ const write = (type, content) => {
 write("user", after("-p"));
 
 const modes = (process.env.STAND_IN_CLAUDE_MODE ?? "finish").split(",");
+/** Whether Claude Code's Write tool may write the file: inside its working directories, with edits accepted. */
+function writable(file) {
+  const directories = [process.cwd(), ...args.flatMap((arg, i) => (args[i - 1] === "--add-dir" ? [arg] : []))];
+  const acceptEdits = after("--permission-mode") === "acceptEdits";
+  return acceptEdits && directories.some((directory) => file === directory || file.startsWith(`${directory}/`));
+}
 const mode = modes[Math.min(runIndex, modes.length - 1)];
 if (mode === "wait-finish") {
   while (!existsSync(`${process.env.STAND_IN_CLAUDE_LOG}.go`)) await new Promise((resolve) => setTimeout(resolve, 20));
@@ -100,10 +108,20 @@ if (mode === "hang" || mode === "hang-hard") {
     permission_denials: [{ tool_name: "Edit", tool_use_id: "toolu_stand_in", tool_input: { file_path } }],
   });
   process.exit(0);
+} else if (mode.startsWith("write:") && !writable(mode.slice(6))) {
+  say({
+    type: "result",
+    subtype: "success",
+    session_id: sessionId,
+    is_error: false,
+    permission_denials: [{ tool_name: "Write", tool_use_id: "toolu_stand_in", tool_input: { file_path: mode.slice(6) } }],
+  });
+  process.exit(0);
 } else if (mode.startsWith("exit:")) {
   process.stderr.write("stand-in claude gave up\n");
   process.exit(Number(mode.slice(5)));
 } else {
+  if (mode.startsWith("write:")) writeFileSync(mode.slice(6), "written by the stand-in claude\n");
   const runId = /Run id is ([0-9a-f-]{36})/.exec(after("-p"))[1];
   const server = mcpConfig.mcpServers.cronk;
   const rpc = async (id, method, params) => {

@@ -1,4 +1,4 @@
-import { readdir, stat, writeFile } from "node:fs/promises";
+import { readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ClaimedRun } from "./api.js";
@@ -71,16 +71,30 @@ const allowsEdits = (rule: string) =>
   claudeEditTools.includes(rule.trim().replace(/\(.*$/s, ""));
 
 /**
+ * The Runner's allowed directories with each one's real path too, where it differs, such as `/private/tmp` for `/tmp`
+ * on macOS, since Claude Code checks a file's resolved path. A directory that doesn't exist is kept as written.
+ */
+export async function withRealPaths(directories: readonly string[]): Promise<string[]> {
+  const resolved = await Promise.all(directories.map((directory) => realpath(directory).catch(() => directory)));
+  return [...new Set(directories.flatMap((directory, i) => [directory, resolved[i]!]))];
+}
+
+/**
  * The arguments `claude` runs a claimed Run with: edits accepted, and the Runner's allowlist, with Cronk's own tools
  * always in it, as the tools it may use without asking. In `-p` mode a tool call outside them is denied. A
  * Repository's committed Claude Code settings add their own allow rules, as Claude Code merges them.
  *
  * A Run of a read-only Step accepts no edits: the edit tools are disallowed, which wins over any allow rule, the
  * Repository's included, and dropped from the allowlist. Commands that write, such as `sed -i`, aren't stopped.
+ *
+ * The Runner's allowed directories, as given (`withRealPaths` adds their real paths), are added as working
+ * directories with `--add-dir`, so its file tools read there and, with edits accepted, write there; any other path
+ * outside the worktree stays denied. A read-only Step's Run may read them but not edit.
  */
 export function claudeArguments(
   claimed: ClaimedRun,
   mcpConfigPath: string,
+  directories: readonly string[] = claimed.allowedDirectories ?? [],
 ): string[] {
   const readOnly = claimed.readOnly === true;
   const allowed = [
@@ -103,6 +117,8 @@ export function claudeArguments(
     "--permission-mode",
     readOnly ? "default" : "acceptEdits",
     ...(readOnly ? ["--disallowedTools", ...claudeEditTools] : []),
+    // One directory per flag, so none swallows an argument after it.
+    ...directories.flatMap((directory) => ["--add-dir", directory]),
     // Last, one rule per argument: the flag takes every argument after it.
     "--allowedTools",
     ...allowed,
@@ -222,7 +238,7 @@ export function claudeCode(command = "claude"): RunProgram {
         mode: 0o600,
       });
       return {
-        args: claudeArguments(claimed, mcpConfigPath),
+        args: claudeArguments(claimed, mcpConfigPath, await withRealPaths(claimed.allowedDirectories ?? [])),
         identity: mcpConfigPath,
         // The User's own environment, signed in to Claude as they are.
         env: { ...env.base, ...env.workspace },
