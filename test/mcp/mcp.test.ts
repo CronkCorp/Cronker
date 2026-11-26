@@ -1438,6 +1438,13 @@ describe("MCP with an Agent token", () => {
     });
     expect(Buffer.from(readPage.json.contentBase64, "base64").equals(await served(page.id))).toBe(true);
 
+    // An empty file is still a file, not a refusal.
+    const empty = await attach("empty.bin", "application/octet-stream", Buffer.alloc(0));
+    expect(await call(client, "read_attachment", { attachment: empty.id })).toEqual({
+      isError: false,
+      json: { id: empty.id, name: "empty.bin", mediaType: "application/octet-stream", size: 0, contentBase64: "" },
+    });
+
     // What the Agent may not read answers as not found, as the download does.
     const hidden = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Secret", key: "SEC" });
     const hiddenDocument = await call(client, "create_document", { project: "SEC", title: "Hush" });

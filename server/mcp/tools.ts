@@ -1860,7 +1860,6 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
   return server;
 }
 
-/** A tool's answer as JSON text; a refusal becomes an error result carrying its code, rule and advice. */
 /** The picture types an MCP client is given as an image rather than as base64. */
 const shownImageTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -1877,6 +1876,7 @@ function nameOf(disposition: string): string {
   return /filename="([^"]*)"/i.exec(disposition)?.[1] ?? "";
 }
 
+/** A tool's answer as JSON text; a refusal becomes an error result carrying its code, rule and advice. */
 async function answer(work: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return { content: [{ type: "text", text: JSON.stringify(await work(), null, 2) }] };
