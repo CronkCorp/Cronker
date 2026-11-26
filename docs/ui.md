@@ -26,7 +26,7 @@ The web client follows this file since the styling pass at the end of milestone 
   - The search box, which opens the Workspace's search results on Enter. Below 760px it takes a line of its own under the strip's links.
   - Inbox, with the number of waiting items as a red count. It stays Workspace-wide.
   - **Tickets**, which leads to the active Project's board, hidden in a Workspace with no Project.
-  - Documents, Terms, Decisions and Artifacts: the active Project's, or the Workspace's when it has no Project.
+  - Documents, Terms, Decisions and Artifacts: the active Project's, or the Workspace's when it has no Project. Each shows, as a red count like the Inbox's, how many New knowledge items of its kind wait in the User's Inbox for the place it leads to, read as part of its name ("Documents, 2 new"), and nothing at zero. They share the Inbox link's fetch, so they change live with it.
   - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins. Runners shows even without a Workspace, since a User's Runners belong to none.
   - The signed-in User, by their display name (else their email or GitHub login), marked "Admin" for an Admin, which opens a menu: Account settings and Sign out.
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Project's board, List, settings or one of its Tickets marks Tickets, and a Document marks Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Account settings, New Workspace or a page that isn't there, marks none.
