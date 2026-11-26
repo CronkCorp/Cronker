@@ -726,7 +726,8 @@ function useEdgeScroll() {
  * A card's context menu: Move to its Project's Statuses, Delegate to the User's own Agents or Undelegate, and, while
  * it is delegated, Autonomous Delegation. Each saves at once through `onEdit`, as a drop does; Cronk keeps the rules.
  * Under them, the Ticket's links and copies (CardLinks), the only items with Read. On a card of a selection of
- * several, it offers only Move to, for the whole selection, through `onMoveSelection`.
+ * several, it offers only Move to and Archive, for the whole selection, through `onMoveSelection` and
+ * `onArchiveSelection`.
  */
 function CardMenu({
   ticket,
@@ -737,6 +738,7 @@ function CardMenu({
   onEdit,
   onRetry,
   onMoveSelection,
+  onArchiveSelection,
 }: {
   ticket: TicketSummary;
   project: Project;
@@ -749,20 +751,26 @@ function CardMenu({
   onEdit: (edit: TicketEdit) => void;
   onRetry: () => void;
   onMoveSelection: (statusId: string) => void;
+  onArchiveSelection: () => void;
 }) {
   if (!canWrite) return <CardLinks ticket={ticket} canRetry={false} onRetry={onRetry} />;
   if (selection > 1) {
     return (
-      <MenuSub label={`Move ${ticketCount(selection)} to`}>
-        {/* A mixed selection has no one current Status, so none is checked. */}
-        <MenuRadioGroup label="Statuses" value="" onChange={onMoveSelection}>
-          {project.statuses.map((status) => (
-            <MenuRadioItem key={status.id} value={status.id}>
-              <StatusPill kind={status.kind} name={status.name} model={status.step?.model} />
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </MenuSub>
+      <>
+        <MenuSub label={`Move ${ticketCount(selection)} to`}>
+          {/* A mixed selection has no one current Status, so none is checked. */}
+          <MenuRadioGroup label="Statuses" value="" onChange={onMoveSelection}>
+            {project.statuses.map((status) => (
+              <MenuRadioItem key={status.id} value={status.id}>
+                <StatusPill kind={status.kind} name={status.name} model={status.step?.model} />
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuSub>
+        <MenuSeparator />
+        {/* Offered for any selection: Cronk refuses each Ticket it can't archive, and the refusals are listed. */}
+        <MenuItem onSelect={onArchiveSelection}>Archive {ticketCount(selection)}</MenuItem>
+      </>
     );
   }
   return (
@@ -873,6 +881,7 @@ function Card({
   onRetry,
   onSelect,
   onMoveSelection,
+  onArchiveSelection,
 }: {
   ticket: TicketSummary;
   project: Project;
@@ -888,6 +897,7 @@ function Card({
   onRetry: () => void;
   onSelect: (range: boolean) => void;
   onMoveSelection: (statusId: string) => void;
+  onArchiveSelection: () => void;
 }) {
   const to = useAddresses();
   // With Read, a card neither drags nor selects, and its context menu has only its links and copies.
@@ -966,6 +976,7 @@ function Card({
           onEdit={onEdit}
           onRetry={onRetry}
           onMoveSelection={onMoveSelection}
+          onArchiveSelection={onArchiveSelection}
         />
       }
     >
@@ -1110,7 +1121,11 @@ function Board({
   onChanged: (edited?: TicketSummary) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [refusals, setRefusals] = useState<{ total: number; refused: { key: string; message: string }[] } | null>(null);
+  const [refusals, setRefusals] = useState<{
+    verb: "moved" | "archived";
+    total: number;
+    refused: { key: string; message: string }[];
+  } | null>(null);
   const [target, setTarget] = useState<string | null>(null);
   // The selected Tickets' ids, and the one a range is selected from.
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -1212,8 +1227,32 @@ function Board({
         refused.push({ key: ticket.key, message: e instanceof Error ? e.message : String(e) });
       }
     }
-    if (refused.length > 0) setRefusals({ total: moving.length, refused });
+    if (refused.length > 0) setRefusals({ verb: "moved", total: moving.length, refused });
     setSelected((current) => new Set([...current].filter((id) => !moved.has(id))));
+    onChanged();
+  };
+
+  /**
+   * Archives every selected Ticket, one at a time, each as if archived alone, so each is its own Change. A refused one
+   * (not Done or Canceled, Unverified, already archived) doesn't stop the rest; the refusals are listed above the
+   * board, and those Tickets stay selected while the archived ones leave the selection and the board.
+   */
+  const archiveSelection = async () => {
+    setError(null);
+    setRefusals(null);
+    const archiving = tickets.filter((t) => selected.has(t.id));
+    const refused: { key: string; message: string }[] = [];
+    const archived = new Set<string>();
+    for (const ticket of archiving) {
+      try {
+        await api.archiveTicket(ticket.id);
+        archived.add(ticket.id);
+      } catch (e) {
+        refused.push({ key: ticket.key, message: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    if (refused.length > 0) setRefusals({ verb: "archived", total: archiving.length, refused });
+    setSelected((current) => new Set([...current].filter((id) => !archived.has(id))));
     onChanged();
   };
 
@@ -1235,7 +1274,7 @@ function Board({
       {refusals && (
         <div role="alert" className="form-error board-refusals">
           <p>
-            {refusals.refused.length} of {ticketCount(refusals.total)} not moved:
+            {refusals.refused.length} of {ticketCount(refusals.total)} not {refusals.verb}:
           </p>
           <ul>
             {refusals.refused.map((r) => (
@@ -1341,6 +1380,7 @@ function Board({
                       onRetry={() => void retry(ticket.id)}
                       onSelect={(range) => select(ticket, range)}
                       onMoveSelection={(statusId) => void moveSelection(statusId)}
+                      onArchiveSelection={() => void archiveSelection()}
                     />
                   ))}
                   {copies.map((parent) => (

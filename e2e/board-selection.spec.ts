@@ -140,3 +140,60 @@ test("a selection's refused moves are listed per Ticket, the rest still move, an
   await expect(selected("Backlog")).toHaveAccessibleName(new RegExp(`^${refused.key} `));
   await expect(count).toHaveText(/1 selected/);
 });
+
+test("Archive on a selection archives each Done Ticket as its own Change, lists the refused ones, and keeps them selected", async ({
+  page,
+  cronk,
+}) => {
+  const { call, project, tickets, lane, cards, selected, count } = await board(page, cronk);
+  const done = project.statuses.find((s: { name: string }) => s.name === "Done").id;
+  for (const ticket of tickets.slice(0, 3)) await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: done });
+  const archives: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/archive")) archives.push(request.url());
+  });
+
+  await lane("Done").getByRole("button", { name: "Done, 3 Tickets" }).click();
+  await expect(cards("Done")).toHaveCount(3);
+  await cards("Done").nth(0).click({ modifiers: ["ControlOrMeta"] });
+  await cards("Done").nth(1).click({ modifiers: ["Shift"] });
+  // A Ticket still in Backlog joins the selection: Cronk refuses to archive it, and the rest go on.
+  await cards("Backlog").nth(0).click({ modifiers: ["ControlOrMeta"] });
+  await expect(count).toHaveText(/3 selected/);
+
+  await selected("Done").nth(0).click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Move 3 Tickets to" })).toBeVisible();
+  await menu.getByRole("menuitem", { name: "Archive 3 Tickets" }).click();
+
+  const backlogKey = tickets[3].key;
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("1 of 3 Tickets not archived:");
+  await expect(alert.getByRole("listitem")).toHaveText([`${backlogKey}: ${backlogKey} is in Backlog, so it isn't archived.`]);
+  // The archived ones leave the board and the selection; the refused one stays selected.
+  await expect(cards("Done")).toHaveCount(1);
+  await expect(selected("Backlog")).toHaveCount(1);
+  await expect(count).toHaveText(/1 selected/);
+  expect(archives).toHaveLength(3);
+
+  // Each archived Ticket is its own Change.
+  for (const ticket of tickets.slice(0, 2)) {
+    expect(await call("GET", `/api/tickets/${ticket.id}`)).toMatchObject({ archived: true });
+    const changes = (await call("GET", `/api/tickets/${ticket.id}/timeline`)) as { field?: string }[];
+    expect(changes.filter((c) => c.field === "archived")).toHaveLength(1);
+  }
+
+  // Once it is Done too, it and the last Done Ticket archive together and Done is left empty.
+  await call("PATCH", `/api/tickets/${tickets[3].id}`, { statusId: done });
+  await expect(cards("Done")).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(count).toBeHidden();
+  await cards("Done").nth(0).click({ modifiers: ["ControlOrMeta"] });
+  await cards("Done").nth(1).click({ modifiers: ["ControlOrMeta"] });
+  await expect(count).toHaveText(/2 selected/);
+  await selected("Done").nth(0).click({ button: "right" });
+  await menu.getByRole("menuitem", { name: "Archive 2 Tickets" }).click();
+  await expect(cards("Done")).toHaveCount(0);
+  await expect(count).toBeHidden();
+  await expect(alert).toBeHidden();
+});
