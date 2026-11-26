@@ -28,7 +28,8 @@ const investigate = `Investigate how to do this Ticket's work, without changing 
 
 - Read the Ticket, its Comments, its Relations and any earlier Reports.
 - Find the code, documents and decisions the work touches, and anything that makes it risky: this Ticket's Project's documents and decisions, and another Project's only where the Ticket names it.
-- Write a Report on the Ticket: what you found, the approach you recommend and why, and the open questions, if any.
+- If the work needs something not on the default branch yet that is a change of its own, such as a harness or a shared helper, split it off now: \`create_sub_ticket\` for it, saying what it must provide and for which Ticket. This Ticket gets no Runs until its Sub-Tickets are finished, so Implement starts once the prerequisite is done. For a prerequisite in another Project, \`file_ticket\` there and \`add_block\` from it to this Ticket.
+- Write a Report on the Ticket: what you found, the approach you recommend and why, any prerequisite you split off, and the open questions, if any.
 
 Finish with **done** once the Report gives the implementation what it needs. Finish with **needs you** and a Question when a choice only a User can make blocks the approach.`;
 
@@ -37,6 +38,7 @@ const implement = `Implement this Ticket's work.
 - Read the Ticket, its Comments and the Reports of earlier Runs, the investigation's above all.
 - Make the change on a branch named \`<type>/<KEY>-<slug>\`, with tests: \`<type>\` is \`feat\`, \`fix\`, \`docs\`, \`chore\` or \`refactor\`, \`<KEY>\` the Ticket's key and \`<slug>\` a few words of its title, such as \`fix/CRONK-12-lost-runs\`. Open a pull request whose title starts with the key.
 - If the Ticket already has an open Pull Request, push to its branch instead of opening another.
+- One pull request per Ticket: never open a second one, or one that waits on another. If the work needs something not on the default branch yet, include it in this pull request when it is small. Otherwise \`create_sub_ticket\` for it, saying what it must provide and for which Ticket (or, in another Project, \`file_ticket\` there and \`add_block\` from it to this Ticket), commit nothing for it here, and finish with **needs you**, naming that Ticket in the Question.
 - Leave a Comment on the Ticket linking the pull request and saying anything a reviewer should know.
 - Don't wait for its checks: Cronk watches them, a failing check sends the Ticket back here, and the Merge Queue merges only once they are green. When the Ticket comes back for a failing check, read the failing job's log, fix it and push again.
 
