@@ -36,7 +36,13 @@ export type Api = (
   path: string,
   body?: unknown,
   file?: { bytes: Buffer; mediaType: string },
-) => Promise<{ status: number; json: unknown }>;
+) => Promise<{ status: number; json: unknown; file?: ApiFile }>;
+
+/** A file an API route answered with, rather than JSON: its bytes and the response's headers. */
+export interface ApiFile {
+  bytes: Buffer;
+  headers: Record<string, string | string[] | number | undefined>;
+}
 
 interface Refusal extends Partial<Guidance> {
   code: string;
@@ -965,6 +971,46 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
       }),
   );
 
+  server.registerTool(
+    "read_attachment",
+    {
+      title: "Read an Attachment",
+      description:
+        "Downloads an Attachment's file, the same bytes Cronk serves Users, for whoever may read the Ticket, Document " +
+        "or Comment it is attached to; one you may not read answers as not found. Name it by its id, as `read_ticket`, " +
+        "`read_document` and Markdown's `attachment:<id>` give it. The answer starts with its `id`, `name`, " +
+        "`mediaType` and `size`; a picture (PNG, JPEG, GIF or WebP) follows as an image and plain text as text, and " +
+        "any other file comes as `contentBase64` in that JSON. A file is at most the size Cronk is configured with " +
+        "(25 MB by default), and its base64 is a third larger, so mind how much of your context a large one takes.",
+      inputSchema: {
+        attachment: z
+          .string()
+          .min(1)
+          .describe("The Attachment's id, with or without the `attachment:` of its Markdown reference."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ attachment }) => {
+      const id = attachment.trim().replace(/^attachment:/, "");
+      try {
+        const { status, json, file } = await api("GET", `/api/attachments/${encodeURIComponent(id)}/content`);
+        if (status >= 400 || !file) throw new Refused((json as { error: Refusal }).error);
+        const header = (name: string) => String(file.headers[name] ?? "");
+        const mediaType = header("x-attachment-media-type") || header("content-type").split(";")[0]!.trim();
+        const about = { id, name: nameOf(header("content-disposition")), mediaType, size: file.bytes.length };
+        const asText = (value: unknown) => ({ type: "text" as const, text: JSON.stringify(value, null, 2) });
+        if (shownImageTypes.has(mediaType)) {
+          return { content: [asText(about), { type: "image", data: file.bytes.toString("base64"), mimeType: mediaType }] };
+        }
+        if (mediaType === "text/plain") return { content: [asText(about), { type: "text", text: file.bytes.toString("utf8") }] };
+        return { content: [asText({ ...about, contentBase64: file.bytes.toString("base64") })] };
+      } catch (error) {
+        if (!(error instanceof Refused)) throw error;
+        return { isError: true, content: [{ type: "text", text: JSON.stringify(error.refusal, null, 2) }] };
+      }
+    },
+  );
+
   const artifactArgument = z
     .string()
     .min(1)
@@ -1812,6 +1858,22 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
   }
 
   return server;
+}
+
+/** The picture types an MCP client is given as an image rather than as base64. */
+const shownImageTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** A file's name from its `Content-Disposition`: the UTF-8 `filename*` when given, else the plain `filename`. */
+function nameOf(disposition: string): string {
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      // Fall back to the plain name below.
+    }
+  }
+  return /filename="([^"]*)"/i.exec(disposition)?.[1] ?? "";
 }
 
 /** A tool's answer as JSON text; a refusal becomes an error result carrying its code, rule and advice. */

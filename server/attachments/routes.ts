@@ -129,7 +129,8 @@ export function attachmentRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "The file, for whoever can read what it's attached to, as a download (`Content-Disposition: attachment`). " +
             "Pictures (PNG, JPEG, GIF, WebP, AVIF) and plain text keep their media type; anything else is served as " +
-            "`application/octet-stream`, sandboxed, so an attached page or script never runs on Cronk's origin. " +
+            "`application/octet-stream`, sandboxed, so an attached page or script never runs on Cronk's origin; " +
+            "`X-Attachment-Media-Type` names the type it was attached with. " +
             "Markdown refers to an Attachment as `attachment:<id>`, which clients resolve to this path.",
           params: AttachmentParams,
           produces: ["application/octet-stream"],
@@ -141,6 +142,8 @@ export function attachmentRoutes(context: Context): FastifyPluginAsyncTypebox {
         const { attachment, content } = await attachmentContent(context, caller, request.params.attachmentId);
         return reply
           .header("content-type", servedType(attachment.mediaType))
+          // The type it was attached with, which `content-type` hides for anything that isn't inert.
+          .header("x-attachment-media-type", attachment.mediaType)
           .header("content-length", attachment.size)
           .header("content-disposition", disposition(attachment.name))
           .header("x-content-type-options", "nosniff")

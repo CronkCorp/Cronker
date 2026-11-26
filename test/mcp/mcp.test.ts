@@ -110,6 +110,7 @@ describe("MCP with an Agent token", () => {
       "merge_pull_request",
       "propose_decision",
       "read_artifact",
+      "read_attachment",
       "read_decision",
       "read_document",
       "read_glossary",
@@ -1404,6 +1405,66 @@ describe("MCP with an Agent token", () => {
     const read = await call(client, "read_ticket", { ticket: "CRONK-1" });
     expect(read.json.attachments).toEqual([]);
     expect(read.json.comments.find((c: { id: string }) => c.id === comment.json.id).attachments).toEqual([onComment.json]);
+  });
+
+  test("an Agent reads back a text file, a picture and another file with the bytes the download serves", async () => {
+    const { cookie, workspace, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const document = await call(client, "create_document", { title: "Findings" });
+    const attach = async (name: string, mediaType: string, bytes: Buffer) =>
+      (await call(client, "attach_file", { document: document.json.id, name, mediaType, contentBase64: bytes.toString("base64") })).json;
+    const served = async (id: string) =>
+      Buffer.from(await (await cronk.request("GET", `/api/attachments/${id}/content`, { cookie })).arrayBuffer());
+    const text = await attach("notes – ü.txt", "text/plain", Buffer.from("It works, ü.\n"));
+    const picture = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 255]);
+    const png = await attach("screen.png", "image/png", picture);
+    const binary = Buffer.from([0, 255, 1, 254, 10, 13]);
+    const page = await attach("page.html", "text/html", binary);
+
+    const readText = await client.callTool({ name: "read_attachment", arguments: { attachment: `attachment:${text.id}` } });
+    const readPng = await client.callTool({ name: "read_attachment", arguments: { attachment: png.id } });
+    const readPage = await call(client, "read_attachment", { attachment: page.id });
+
+    const [textAbout, textBody] = readText.content as { type: string; text: string }[];
+    expect(JSON.parse(textAbout!.text)).toEqual({ id: text.id, name: "notes – ü.txt", mediaType: "text/plain", size: 14 });
+    expect(Buffer.from(textBody!.text).equals(await served(text.id))).toBe(true);
+    const [pngAbout, image] = readPng.content as { type: string; text: string; data: string; mimeType: string }[];
+    expect(JSON.parse(pngAbout!.text)).toEqual(expect.objectContaining({ name: "screen.png", mediaType: "image/png", size: 8 }));
+    expect(image).toEqual({ type: "image", mimeType: "image/png", data: picture.toString("base64") });
+    expect(Buffer.from(image!.data, "base64").equals(await served(png.id))).toBe(true);
+    expect(readPage).toEqual({
+      isError: false,
+      json: { id: page.id, name: "page.html", mediaType: "text/html", size: 6, contentBase64: binary.toString("base64") },
+    });
+    expect(Buffer.from(readPage.json.contentBase64, "base64").equals(await served(page.id))).toBe(true);
+
+    // An empty file is still a file, not a refusal.
+    const empty = await attach("empty.bin", "application/octet-stream", Buffer.alloc(0));
+    expect(await call(client, "read_attachment", { attachment: empty.id })).toEqual({
+      isError: false,
+      json: { id: empty.id, name: "empty.bin", mediaType: "application/octet-stream", size: 0, contentBase64: "" },
+    });
+
+    // What the Agent may not read answers as not found, as the download does.
+    const hidden = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Secret", key: "SEC" });
+    const hiddenDocument = await call(client, "create_document", { project: "SEC", title: "Hush" });
+    const secretFile = await call(client, "attach_file", {
+      document: hiddenDocument.json.id,
+      name: "secret.txt",
+      mediaType: "text/plain",
+      contentBase64: Buffer.from("secret").toString("base64"),
+    });
+    const readable = await call(client, "read_attachment", { attachment: secretFile.json.id });
+    const access = await cronk.request("PUT", `/api/projects/${hidden.id}/access`, {
+      cookie,
+      body: { visibility: "open", users: [], agentAccess: "none" },
+    });
+    expect(access.status).toBe(200);
+    expect(readable.isError).toBe(false);
+    const refused = await call(client, "read_attachment", { attachment: secretFile.json.id });
+    const unknown = await call(client, "read_attachment", { attachment: "00000000-0000-4000-8000-000000000000" });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "not_found", message: "No such Attachment." }) });
+    expect(unknown.json).toEqual(refused.json);
   });
 
   test("a file that isn't base64, goes to two places at once, or is over the limit is refused", async () => {
