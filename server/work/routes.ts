@@ -359,10 +359,10 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const caller = await requireCaller(context, request);
         const { projectId, statusId } = request.params;
-        const { kind = "ordinary", roundLimit = defaultRoundLimit, labelRule = null, readOnly = false, ...step } = request.body;
+        const { kind = "ordinary", roundLimit = defaultRoundLimit, labelRule = null, readOnly = false, runner = null, ...step } = request.body;
         return changeStep(context, caller, projectId, statusId, {
           type: "put",
-          step: { ...step, kind, roundLimit, labelRule, readOnly },
+          step: { ...step, kind, roundLimit, labelRule, readOnly, runner },
         });
       },
     );

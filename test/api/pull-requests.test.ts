@@ -1622,6 +1622,8 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.applyAhead("0093_project_default_agent.sql");
     // Reading a Ticket says whether it is archived.
     await cronk.applyAhead("0094_ticket_archiving.sql");
+    // Creating a Project writes its Steps' Runner.
+    await cronk.applyAhead("0095_step_runners.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

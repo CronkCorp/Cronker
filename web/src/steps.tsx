@@ -30,6 +30,7 @@ function newStep(project: Project, status: Status): Step {
     roundLimit: 2,
     labelRule: null,
     readOnly: false,
+    runner: null,
     outcomes: [
       { name: "done", statusId: next.id, default: true, needsYou: false, countsAsRound: false },
       { name: "needs you", statusId: firstOther.id, default: false, needsYou: true, countsAsRound: false },
@@ -80,6 +81,7 @@ function StepItem({
         `${status.step.outcomes.length} Outcomes`,
         ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : []),
         ...(status.step.readOnly ? ["read-only"] : []),
+        ...(status.step.runner ? [`on ${status.step.runner}`] : []),
       ].join(", ")
     : "No Step: Tickets here wait for a User";
 
@@ -214,6 +216,17 @@ function StepForm({
           </Field>
         )}
       </div>
+      <Field
+        label={`Runner for ${of}`}
+        hint="A Runner's name: Runs of this Step start on the Runner of that name of the Delegate's Owner, and are refused if they have none. Empty for the Delegate's own Runner."
+      >
+        <input
+          maxLength={100}
+          placeholder="The Delegate's own Runner"
+          value={draft.runner ?? ""}
+          onChange={(e) => onDraft({ ...draft, runner: e.target.value.trim() ? e.target.value : null })}
+        />
+      </Field>
       <Check
         label={`${of} is read-only`}
         hint="Its Runs on machine Runners can't edit files, and their Brief says so. Commands that write, such as sed -i, aren't stopped."

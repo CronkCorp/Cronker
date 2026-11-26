@@ -14,7 +14,7 @@ interface Status {
   id: string;
   name: string;
   kind: string;
-  step: { kind: "ordinary" | "merge"; brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; readOnly: boolean; outcomes: Outcome[] } | null;
+  step: { kind: "ordinary" | "merge"; brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; readOnly: boolean; runner: string | null; outcomes: Outcome[] } | null;
 }
 interface LabelRule {
   kind: "requires" | "skippedBy";
@@ -219,6 +219,7 @@ function readyStep(id: (name: string) => string) {
     roundLimit: 3,
     labelRule: null,
     readOnly: false,
+    runner: null,
     outcomes: [
       outcome("planned", id("Investigate"), { default: true }),
       outcome("unclear", id("Triage"), { countsAsRound: true }),
@@ -256,7 +257,7 @@ describe("attaching, editing and removing a Step", () => {
     expect(((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step!.roundLimit).toBe(2);
   });
 
-  test("editing a Step replaces its Brief, model, round limit, Label rule, read-only setting and Outcomes", async () => {
+  test("editing a Step replaces its Brief, model, round limit, Label rule, read-only setting, Runner and Outcomes", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const edited = {
       kind: "ordinary",
@@ -265,6 +266,7 @@ describe("attaching, editing and removing a Step", () => {
       roundLimit: 1,
       labelRule: { kind: "requires", label: "ready-to-go" },
       readOnly: false,
+      runner: "Desktop",
       outcomes: [outcome("go", id("Investigate"), { default: true }), outcome("ask", id("Backlog"), { needsYou: true })],
     };
 
@@ -636,6 +638,7 @@ describe("Outcome refusals", () => {
       roundLimit: 2,
       labelRule: null,
       readOnly: false,
+      runner: null,
       outcomes: [
         outcome("again", id("Ready"), { default: true }),
         outcome("retry", id("Ready"), { countsAsRound: true }),

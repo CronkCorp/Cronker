@@ -26,6 +26,7 @@ import {
 } from "./pull-request-merging.js";
 import { failingCheckOn, sendBackForFailure, type Failure } from "./sending-back.js";
 import { startRunIfNeeded } from "../runs/runs.js";
+import { ticketRunner } from "../runs/waiting.js";
 import { insertComment } from "../work/comment-writes.js";
 
 /**
@@ -214,11 +215,10 @@ export async function dropAutonomousEntries(
          and merge_queue.queued_by_agent_id is not null and not merge_queue.by_full_token
          and merge_queue.state in ('queued', 'waiting-for-checks')
        returning merge_queue.ticket_id, merge_queue.pull_request_id)
-     select tickets.id as "ticketId", tickets.workspace_id as "workspaceId", agents.runner_id as "runnerId",
+     select tickets.id as "ticketId", tickets.workspace_id as "workspaceId", ${ticketRunner("tickets")} as "runnerId",
        json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
          'number', pull_requests.number, 'url', pull_requests.url) as "pullRequest"
      from dropped join tickets on tickets.id = dropped.ticket_id join pull_requests on pull_requests.id = dropped.pull_request_id
-       left join agents on agents.id = tickets.delegate_id
      order by tickets.number, pull_requests.id`,
     [projectId],
   );
