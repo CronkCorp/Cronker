@@ -35,6 +35,20 @@ A skill that asks for a parent and children files a ticket set: the parent with 
 
 To put existing Tickets under a parent, or take them out from under one, use `set_parent` during a Run in their Project. The Tickets keep their own Assignee and Delegation.
 
+## Work that needs a prerequisite
+
+A Ticket gets one pull request for its own change. When its work needs something not on the default branch yet:
+
+- **Small**: include it in the Ticket's own pull request.
+- **A change of its own**, such as a harness or a shared helper: `create_sub_ticket` for it, saying what it must provide and for which Ticket, and commit nothing for it on the parent's branch. Investigate does this when it finds the prerequisite, so the parent goes on to Implement and waits there, blocked, until the Sub-Ticket is finished, then its Implement Run starts by itself. Implement, finding it later, also finishes with **needs you**: the parent moves to Ready, and a User moves it back to Implement once the Sub-Ticket is under way, where it waits the same way.
+- **In another Project**: `file_ticket` there and `add_block` from it to the Ticket. It waits in the Inbox as a Discovered Ticket until a User takes it up.
+
+A Sub-Ticket starts in Backlog with its parent's Delegation; a User moves it into the pipeline like any Ticket, and it goes through every Step, review included.
+
+Why not forbid prerequisites instead: a Run often finds what it needs only mid-work, and forbidding it ends in a stuck Run or a pull request that grows past its Ticket. Why not a second pull request on the same Ticket: both link to it by key and nothing ties their order, so merging the prerequisite alone can complete the Ticket with its own change unmerged (ZLOGIC-19, #331 and #332).
+
+The default Investigate and Implement Briefs say this; a Project made before CRONK-176 keeps its own Briefs, so an Admin adds the same rule to them with `set_step` or the board settings.
+
 ## Releases
 
 To see a Project's Releases, use `list_releases`; to plan one, `create_release`, and `rename_release` or `delete_release` while it is planned. Tag Tickets with the `release` field of `file_ticket`, `edit_ticket` and `create_sub_ticket`. Cutting and releasing stay with Users.

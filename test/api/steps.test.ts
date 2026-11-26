@@ -152,6 +152,14 @@ describe("the default board's Steps", () => {
     );
   });
 
+  test("the default Investigate and Implement Briefs hand a prerequisite to a Sub-Ticket rather than a second pull request", async () => {
+    const { status } = await projectOnDefaultBoard();
+
+    expect(status("Investigate").step!.brief).toContain("`create_sub_ticket` for it");
+    expect(status("Implement").step!.brief).toContain("One pull request per Ticket: never open a second one, or one that waits on another.");
+    expect(status("Implement").step!.brief).toContain("`create_sub_ticket` for it");
+  });
+
   test("an existing Project's Steps on Statuses named Triage or Investigate become read-only, and its other Steps don't", async () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0091_read_only_steps.sql" });
