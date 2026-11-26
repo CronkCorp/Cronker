@@ -275,8 +275,8 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   // draggable="true"; draggable="false" makes them select it always, user-select notwithstanding.
   await expect(link("Backlog"), "the card's link is explicitly draggable").toHaveAttribute("draggable", "true");
 
-  /** The middle of a part of the card, once its box has stopped moving across two animation frames. */
-  const middleOf = (part: Locator) => async () => {
+  /** A part of the card's box, once it has stopped moving across two animation frames. */
+  const settled = async (part: Locator) => {
     let box = await part.boundingBox({ timeout: 3_000 });
     await expect(async () => {
       const before = box;
@@ -284,18 +284,27 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
       box = await part.boundingBox({ timeout: 3_000 });
       expect(box, "the card has settled").toEqual(before);
     }).toPass({ timeout: 5_000 });
-    return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
+    return box!;
+  };
+
+  /** The middle of a part of the card, once its box has settled. */
+  const middleOf = (part: Locator) => async () => {
+    const box = await settled(part);
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   };
 
   /**
    * Presses at a point of the card, moves to the middle of a column and lets go there. Retried: on a loaded CI
    * runner the board may still be refetching or laying out after the previous drop, so the press can land off the
    * card and Firefox starts no native drag (CRONK-128, as for the middle-click in CRONK-106). Each attempt measures
-   * the point afresh and stops at once if an earlier attempt's drop has landed after all.
+   * the point afresh and stops at once if an earlier attempt's drop has landed after all. A press that landed off the
+   * card selects whatever text the move crossed, so each attempt that presses clears the selection first: what the
+   * check below sees is then only what the attempt that dragged the card selected (CRONK-173).
    */
   const dragFrom = async (at: () => Promise<{ x: number; y: number }>, column: string) => {
     await expect(async () => {
       if (await link(column).isVisible()) return;
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
       const { x, y } = await at();
       await page.mouse.move(x, y);
       await page.mouse.down();
@@ -313,7 +322,7 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
 
   // The link's own box, at its top right, where there is no text: its padding, beside the key.
   await dragFrom(async () => {
-    const ownBox = (await link("Backlog").boundingBox({ timeout: 3_000 }))!;
+    const ownBox = await settled(link("Backlog"));
     return { x: ownBox.x + ownBox.width - 6, y: ownBox.y + 4 };
   }, "Triage");
 
