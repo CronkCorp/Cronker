@@ -328,6 +328,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   const brief = buildBrief(
     context.config,
     ticket.key,
+    { key: ticket.projectKey, name: ticket.projectName },
     statuses,
     status as Status & { step: Step },
     {

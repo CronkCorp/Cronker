@@ -27,7 +27,7 @@ Finish with **ready** when the Ticket is clear enough to investigate. Finish wit
 const investigate = `Investigate how to do this Ticket's work, without changing any code yet.
 
 - Read the Ticket, its Comments, its Relations and any earlier Reports.
-- Find the code, documents and decisions the work touches, and anything that makes it risky.
+- Find the code, documents and decisions the work touches, and anything that makes it risky: this Ticket's Project's documents and decisions, and another Project's only where the Ticket names it.
 - Write a Report on the Ticket: what you found, the approach you recommend and why, and the open questions, if any.
 
 Finish with **done** once the Report gives the implementation what it needs. Finish with **needs you** and a Question when a choice only a User can make blocks the approach.`;

@@ -36,12 +36,13 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
       `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a User, and get no Run.`,
     );
   }
-  const { rows } = await db.query<{ conciseReports: boolean }>(
-    `select concise_reports as "conciseReports" from projects where id = $1`,
+  const { rows } = await db.query<{ key: string; name: string; conciseReports: boolean }>(
+    `select key, name, concise_reports as "conciseReports" from projects where id = $1`,
     [ticket.projectId],
   );
   const backport = status.step.kind === "merge" ? await backportOf(db, ticket.id) : null;
-  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, {
+  const project = { key: rows[0]!.key, name: rows[0]!.name };
+  return buildBrief(config, ticket.key, project, statuses, status as Status & { step: Step }, {
     autonomous: ticket.autonomousDelegation === true,
     conciseReports: rows[0]!.conciseReports,
     ...(backport?.state === "backporting" && backport.statusId === status.id
@@ -85,6 +86,7 @@ export interface BriefBackport {
 export function buildBrief(
   config: Config,
   ticketKey: string,
+  project: { key: string; name: string },
   statuses: Status[],
   status: Status & { step: Step },
   {
@@ -125,6 +127,10 @@ export function buildBrief(
     "",
     `Reach Cronk through its MCP server at ${new URL(mcpPath, config.publicUrl).href}. ` +
       "Read the Ticket there, with its Comments, Relations and the Reports of earlier Runs: this Brief doesn't repeat them.",
+    "",
+    `${ticketKey} is in the Project ${project.key} (${project.name}). Its Documents, glossary and Decisions, and the ` +
+      `Workspace's, are where the work's context is: pass \`project: "${project.key}"\` to the tools that take one ` +
+      "for the Project's own. Read another Project's only where the Ticket names it.",
     "",
     runId ? `Your Run id is ${runId}.` : "Your Run id is given when the Run starts.",
     "",
