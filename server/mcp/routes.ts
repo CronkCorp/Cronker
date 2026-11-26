@@ -42,6 +42,11 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
           headers: { authorization, ...(file ? { "content-type": file.mediaType } : {}) },
           ...(file ? { payload: file.bytes } : body === undefined ? {} : { payload: body as object }),
         });
+        // Errors and most answers are JSON; a downloaded file comes back as its bytes.
+        const contentType = String(response.headers["content-type"] ?? "");
+        if (response.rawPayload.length > 0 && !/^application\/json\b/.test(contentType)) {
+          return { status: response.statusCode, json: null, file: { bytes: response.rawPayload, headers: response.headers } };
+        }
         return { status: response.statusCode, json: response.body ? response.json() : null };
       };
       const server = buildMcpServer(asAgent, level);

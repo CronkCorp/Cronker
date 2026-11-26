@@ -149,6 +149,8 @@ describe("never active content on Cronk's origin", () => {
 
       const downloaded = await download(attachment.id, ada);
       expect(downloaded.headers.get("content-type")).toBe("application/octet-stream");
+      // The type it was attached with is still told, for clients such as the MCP server's `read_attachment`.
+      expect(downloaded.headers.get("x-attachment-media-type")).toBe(file.type);
       expect(downloaded.headers.get("content-disposition")).toMatch(/^attachment;/);
       expect(downloaded.headers.get("x-content-type-options")).toBe("nosniff");
       expect(downloaded.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
